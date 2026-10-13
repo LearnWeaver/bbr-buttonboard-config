@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BBR Button Board</title>
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+<header>
+  <h1>BBR Button Board</h1>
+  <div id="status" class="status">Not connected</div>
+</header>
+
+<p id="unsupported" class="notice" hidden>
+  This page needs Web Serial, which is available in Chrome, Edge and Opera on
+  desktop. It will not work in Firefox or Safari.
+</p>
+
+<nav id="tabs">
+  <button data-screen="connect" class="active">Connect</button>
+  <button data-screen="configure" disabled>Configure</button>
+  <button data-screen="diagnose" disabled>Diagnose</button>
+  <button data-screen="firmware" disabled>Firmware</button>
+</nav>
+
+<main id="screen"></main>
+
+<footer>
+  <span id="dirty" hidden>Unsaved changes</span>
+  <button id="save" disabled>Save to board</button>
+</footer>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

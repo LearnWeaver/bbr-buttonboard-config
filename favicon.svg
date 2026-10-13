@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- BBR Button Board favicon. Keys on a 4/16/4 grid: whole pixels at 16 and 32 px. -->
+  <rect width="64" height="64" rx="10" fill="#11161C"/>
+  <rect x="4" y="4" width="16" height="16" rx="3" fill="#E6E9ED"/>
+  <rect x="24" y="4" width="16" height="16" rx="3" fill="#E6E9ED"/>
+  <rect x="44" y="4" width="16" height="16" rx="3" fill="#D9480F"/>
+  <rect x="4" y="24" width="16" height="16" rx="3" fill="#E6E9ED"/>
+  <rect x="24" y="24" width="16" height="16" rx="3" fill="#E6E9ED"/>
+  <rect x="44" y="24" width="16" height="16" rx="3" fill="#E6E9ED"/>
+  <rect x="4" y="44" width="16" height="16" rx="3" fill="#E6E9ED"/>
+  <rect x="24" y="44" width="16" height="16" rx="3" fill="#E6E9ED"/>
+  <rect x="44" y="44" width="16" height="16" rx="3" fill="#E6E9ED"/>
+</svg>
