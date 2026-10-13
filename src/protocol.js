@@ -3,6 +3,12 @@
 // One command in flight at a time; events ({"ev":...}) are fanned out to
 // listeners whether or not a command is pending.
 
+import { crc16CcittFalse } from './util.js';
+
+// READ returns 1..16 bytes a frame: what the tile can read and CRC inside
+// T_RESP_MAX (PROTOCOL.md §14.9).
+export const SLOT_READ_MAX = 16;
+
 // One auxiliary command leaves the module per poll cycle (§3.2): the host
 // simulator measures 5.7 ms a command on a four-tile chain, so a queue that
 // answered `busy` has room again a few milliseconds later. Waiting rather than
@@ -171,6 +177,32 @@ export class ProtocolClient {
   }
   dispSlotShow(addr, slot)  { return this._disp(`disp ${addr} slot ${slot} show`); }
   dispSlotErase(addr, slot) { return this._disp(`disp ${addr} slot ${slot} erase`); }
+
+  // INFO and READ (§14.9 rev 0.35). INFO is one frame: `{empty}` or
+  // `{fmt, attr, len, crc}` from the slot's header. READ is 1..16 bytes a
+  // frame, the most the tile can read and send inside T_RESP_MAX.
+  dispSlotInfo(addr, slot) { return this._disp(`disp ${addr} slot ${slot} info`); }
+  dispSlotRead(addr, slot, off, len) { return this._disp(`disp ${addr} slot ${slot} read ${off} ${len}`); }
+
+  /**
+   * Read a whole stored picture back: INFO, then every byte, checked against
+   * the CRC the header carries. Resolves to null for an empty slot, else
+   * `{fmt, attr, len, crc, bytes}`. A 32 KB colour picture is 2,048 READs --
+   * seconds -- so `onProgress(done, total)` is called as it goes.
+   */
+  async dispSlotReadAll(addr, slot, onProgress) {
+    const info = await this.dispSlotInfo(addr, slot);
+    if (info.empty) return null;
+    const bytes = new Uint8Array(info.len);
+    for (let off = 0; off < info.len; off += SLOT_READ_MAX) {
+      const n = Math.min(SLOT_READ_MAX, info.len - off);
+      const r = await this.dispSlotRead(addr, slot, off, n);
+      for (let i = 0; i < n; i++) bytes[off + i] = parseInt(r.hex.substr(i * 2, 2), 16);
+      onProgress?.(off + n, info.len);
+    }
+    if (crc16CcittFalse(bytes) !== info.crc) throw new Error('changed while it was being read');
+    return { fmt: info.fmt, attr: info.attr, len: info.len, crc: info.crc, bytes };
+  }
 
   /**
    * Load a whole picture into a slot: BEGIN, every DATA chunk, END.

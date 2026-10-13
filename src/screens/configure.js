@@ -15,7 +15,7 @@ import { RUMBLE_CODE_MAX, bindFor, bindsOf, withBind, withoutBind,
          ledActionsOf, withLedAction, withoutLedAction, RUMBLE_LED_MAX, LED_FX,
          showLegendCall, rawRumbleCall, wireByte, sendValue } from '../rumble.js';
 import { XINPUT_SLOTS, padView, tinySlot } from '../xpad.js';
-import { attrByte, cssOf, isColor, ascii, unrepresentable, NAMES, CAP_DISP_COLOR,
+import { attrByte, cssOf, isColor, ascii, unrepresentable, NAMES, CAP_DISP_COLOR, inkPaperOf,
          ditherTo1bpp, imageChunks, strideOf, paint1bpp,
          encodeRgb565, paintRgb565, slotChunks, slotCrc, SLOT_CHUNK } from '../dispattr.js';
 
@@ -113,17 +113,31 @@ const pictures = new Map();
 // rule a picture brings with it: it owns the panel until Clear.
 const glass = new Map();
 
-// What this page has PUT in each slot, keyed by `${addr}:${slot}`. Also a
-// draft, and more obviously so than the rest: nothing reads a slot back, and a
-// slot survives a power cycle and this page both. Absence here means "this
-// page has not filled it", never "the tile's slot is empty".
+// What this page has PUT in each slot, keyed by `${addr}:${slot}`: the name
+// and the bytes, which the tile does not keep. Absence here means "this page
+// has not filled it", never "the tile's slot is empty" -- that is slotInfo's.
 const stored = new Map();
 const storedAt = (addr, slot) => stored.get(`${addr}:${slot}`);
 
+// What the tile REPORTS for each slot, from §14.9's INFO, keyed the same way:
+// `{empty}` or `{fmt, attr, len, crc}`. Filled by Check slots, and kept in
+// step by Store and Erase. The CRC is how a picture this page stored is
+// recognised again without reading 32 KB back.
+const slotInfo = new Map();
+const infoAt = (addr, slot) => slotInfo.get(`${addr}:${slot}`);
+const nameFor = (addr, slot) => {
+  const st = storedAt(addr, slot), info = infoAt(addr, slot);
+  if (st && (!info || (!info.empty && info.crc === st.crc))) return st.name;
+  if (!info || info.empty) return null;
+  // Not stored from here this session, but perhaps elsewhere on this page.
+  for (const v of stored.values()) if (v.crc === info.crc && v.bytes === info.len) return v.name;
+  return null;
+};
+
 // The two encodings, said the way the choice is actually made.
 const FMT = {
-  '1bpp':   { label: '1 bpp, two colours', code: '1bpp' },
-  'rgb565': { label: 'full colour (RGB565)', code: 'rgb565' },
+  '1bpp':   { label: 'two colours', code: '1bpp' },
+  'rgb565': { label: 'full colour', code: 'rgb565' },
 };
 
 // Re-derive the wire bytes from the source bitmap. Cheap enough to redo on
@@ -234,7 +248,7 @@ async function pushMap(mutate, msg) {
     await refreshMap();
     setStatus(msg, 'ok');
   } catch (e) {
-    setStatus(`Map: ${e.message}`, 'fault');
+    setStatus(`Not applied: ${e.message}`, 'fault');
   }
 }
 
@@ -251,10 +265,10 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
  * does not have. None of them is an error, because a match is not the place to
  * report a configuration error.
  *
- * The one case this page refuses to guess about is a slot it did not fill.
- * §14.9 has no read-back, so "not filled from this page" is all it knows, and
- * a preview that switched to a picture it has never seen would be inventing
- * one. The board may well have changed the glass; this says nothing either way.
+ * The one case this page refuses to guess about is a slot whose pixels it has
+ * not seen: one it neither stored nor loaded back with §14.9's READ. A preview
+ * that switched to a picture it has never seen would be inventing one. The
+ * board may well have changed the glass; this says nothing either way.
  */
 function rumbleAct(code) {
   const b = bindFor(state.map, code);
@@ -407,18 +421,18 @@ function liveLine() {
          + ` The next code that is not zero binds to slot ${arming.slot} of tile ${arming.addr}.`;
   }
   if (!lastRumble) {
-    return '<span class="muted">No rumble packet yet. Every one the board decodes is reported here, bound or not (§8.8).</span>';
+    return '<span class="muted">No rumble code received yet. Every code the board receives shows here, bound or not.</span>';
   }
   const { left, right, code, at } = lastRumble;
   return `<strong>code ${code || '0'}</strong> `
        + `<span class="mono">left ${left} · right ${right}</span> `
        + `<span class="muted">${ago(at)}</span>`
-       + (code ? '' : ' <span class="muted">— zero is a stop, never an action</span>');
+       + (code ? '' : ' <span class="muted">— zero stops a rumble and does nothing here</span>');
 }
 
 function playerLine() {
   if (!lastPlayer) return '';
-  return `<span class="muted">Driver Station assigned <strong>player ${lastPlayer.n}</strong> ${ago(lastPlayer.at)} (§8.5).</span>`;
+  return `<span class="muted">Driver Station assigned <strong>player ${lastPlayer.n}</strong> ${ago(lastPlayer.at)}.</span>`;
 }
 
 // Live highlight without a rebuild, for the same reason `tick()` exists: a
@@ -483,14 +497,14 @@ function inspectKey(t) {
       ${padView({ attr: 'btn',
         cls: n => `${btns.includes(n) ? 'sel' : ''} ${sourcesOf(n).length ? 'used' : ''}`,
         title: n => `Button ${n} · ${XINPUT_SLOTS[n - 1]}` })}
-      <p class="muted small">The same 24 buttons where an Xbox pad has them (§8.5): click either view.
+      <p class="muted small">The same 24 buttons where an Xbox pad has them: click either view.
         ${xinput ? 'Buttons 25–32 have no XInput slot, so this board does not send them.'
                  : 'Under <code>frc</code> the numbers are what the robot sees; the pad names what each becomes under <code>xinput</code>.'}</p>
       <p class="muted small">${cur ? btns.map(btnLabel).join(' + ') : 'Not bound. Pick a number, or press the key on the board.'}</p>
       <div class="group" style="margin-top:.4rem">
         <button class="chip ${comboMode ? 'sel' : ''}" id="combo" title="click numbers to add or remove them">Combo</button>
         ${FTC_COMBOS.map(c => `<button class="chip ${same(btns, c.btns) ? 'sel' : ''}" data-combo="${c.btns.join('+')}"
-                 title="${c.note}: logical ${c.btns.join(' + ')}">${c.label}</button>`).join('')}
+                 title="${c.note}: buttons ${c.btns.join(' + ')}">${c.label}</button>`).join('')}
       </div>
       <p class="muted small">${comboMode
         ? 'Combo is on: each number you click is added to this key or taken off it. One press sends them all together.'
@@ -502,8 +516,8 @@ function inspectKey(t) {
 
     ${combo ? `<div>
       <div class="insp-title">Combo</div>
-      <p class="muted small">This key presses ${btns.map(btnLabel).join(' and ')} together (§9.7). Each of
-        those buttons keeps any other keys it has. Colour comes from the lowest-numbered one with a colour.</p>
+      <p class="muted small">This key presses ${btns.map(btnLabel).join(' and ')} together. Each of
+        those buttons keeps any other keys it has. The key's colour comes from the lowest-numbered one that has one.</p>
     </div>` : `<div>
       <div class="insp-title">Group</div>
       <div class="group">
@@ -511,7 +525,7 @@ function inspectKey(t) {
           `<span class="chip">tile ${s.addr} · K${s.key + 1}<button data-un="${s.addr},${s.key}" title="remove">×</button></span>`).join('')
           : '<span class="muted small">Bind this key first.</span>'}
       </div>
-      ${cur ? '<p class="muted small">Pressed while any source is down (§9.7).</p>' : ''}
+      ${cur ? '<p class="muted small">The button is pressed while any of these keys is down.</p>' : ''}
     </div>`}
 
     <div>
@@ -524,7 +538,7 @@ function inspectKey(t) {
       <div class="group" style="margin-top:.6rem">
         ${FX.map(f => `<button class="chip ${((ledOf(cur).fx) ?? 'solid') === f ? 'sel' : ''}" data-fx="${f}">${f}</button>`).join('')}
       </div>
-      <p class="muted small">Colour follows the button, so it moves with a rebinding (§13.5).</p>`
+      <p class="muted small">The colour belongs to the button, so it moves with the button if you bind it to another key.</p>`
       : '<p class="muted small">Bind this key to give it a colour.</p>'}
     </div>
     ${cur ? robotColour(cur) : ''}`;
@@ -551,7 +565,7 @@ function robotColour(btn) {
     <div>
       <div class="insp-title">Robot colour</div>
       <p class="muted small">A rumble code can recolour this key during a match. It is the same number a
-        legend is switched by, so one <code>${esc(showLegendCall(rledCode))}</code> can change both (§8.8).</p>
+        legend is switched by, so one <code>${esc(showLegendCall(rledCode))}</code> can change both.</p>
       ${acts.map(a => `<div class="disprow rumblerow bound">
         <span class="mono disprow-n">${a.code}</span>
         <span class="small" style="flex:1;min-width:0">${swatch(a.rgb)} ${a.rgb === 'map' ? 'back to the default'
@@ -573,9 +587,9 @@ function robotColour(btn) {
         <button class="ledsw off" data-rled-rgb="off" title="off" ${full ? 'disabled' : ''}>∅</button>
         <button class="chip" data-rled-rgb="map" title="back to the default colour" ${full ? 'disabled' : ''}>normal</button>
       </div>
-      <p class="muted small">A code sets only the buttons it names. The SDK drops a code sent within 50 ms of
-        the next, so if a code is meant to put things back, give it a <em>normal</em> entry for every key the
-        others recolour. Live only: <code>led reset</code> or a power cycle clears it.${full ? ` <strong>The map holds ${RUMBLE_LED_MAX} robot colours, the most it can.</strong>` : ''}</p>
+      <p class="muted small">A code changes only the keys it names. The FTC SDK ignores a code sent less than 50 ms
+        after another, so if a code is meant to put things back, give it a <em>normal</em> entry for every key the
+        other codes recolour. Robot colours last until the board is reset or unplugged.${full ? ` <strong>The board holds at most ${RUMBLE_LED_MAX} robot colours.</strong>` : ''}</p>
     </div>`;
 }
 
@@ -632,7 +646,7 @@ function inspectPicture(t, colour) {
   const pick = (id, value) => `<select id="${id}">
       ${NAMES.map(c => `<option value="${c}" ${value === c ? 'selected' : ''}>${c}</option>`).join('')}
     </select>`;
-  const bytesLine = (p) => `${p.bytes.length.toLocaleString()} B in ${p.chunks} chunk${p.chunks === 1 ? '' : 's'}`;
+  const bytesLine = (p) => `${(p.bytes.length / 1024).toFixed(1)} KB`;
 
   return `
     <div>
@@ -641,22 +655,22 @@ function inspectPicture(t, colour) {
       ${p ? `
       <canvas class="picprev" data-pic="1" width="${t.pxW}" height="${t.pxH}"></canvas>
       <p class="muted small">${p.name.replace(/</g, '&lt;')} — ${bytesLine(p)}.
-        This is what the tile will draw, encoded from the file at ${t.pxW} × ${t.pxH}, not the file itself.</p>
+        This is how it will look on the tile, at ${t.pxW} × ${t.pxH}.</p>
 
       ${slots ? `<div>
-        <label class="pickrow">send as
+        <label class="pickrow">how
           <select id="disp-dest">
-            <option value="stream" ${p.dest === 'stream' ? 'selected' : ''}>a stream — 1 bpp, ~180 ms each time</option>
-            <option value="slot" ${p.dest === 'slot' ? 'selected' : ''}>a stored picture — seconds once, then one frame</option>
+            <option value="stream" ${p.dest === 'stream' ? 'selected' : ''}>send it now — two colours, sent again every time</option>
+            <option value="slot" ${p.dest === 'slot' ? 'selected' : ''}>store it on the tile — shown instantly later</option>
           </select></label>
       </div>` : ''}
 
       ${p.dest === 'slot' ? `<div>
         <label class="pickrow">into slot
           <select id="disp-slot">
-            ${Array.from({ length: slots }, (_, n) => `<option value="${n}" ${p.slot === n ? 'selected' : ''}>slot ${n}${storedAt(t.addr, n) ? ' — in use' : ''}</option>`).join('')}
+            ${Array.from({ length: slots }, (_, n) => `<option value="${n}" ${p.slot === n ? 'selected' : ''}>slot ${n}${(infoAt(t.addr, n) ? !infoAt(t.addr, n).empty : storedAt(t.addr, n)) ? ' — in use' : ''}</option>`).join('')}
           </select></label>
-        ${canColour ? `<label class="pickrow">encoded as
+        ${canColour ? `<label class="pickrow">colours
           <select id="disp-fmt">
             ${Object.entries(FMT).map(([k, v]) => `<option value="${k}" ${p.fmt === k ? 'selected' : ''}>${v.label}</option>`).join('')}
           </select></label>` : ''}
@@ -664,11 +678,11 @@ function inspectPicture(t, colour) {
 
       <div class="group">
         ${p.fmt === 'rgb565'
-          ? `<label class="disprow-dbl">paper ${pick('disp-img-bg', p.bg)}</label>`
+          ? `<label class="disprow-dbl">background ${pick('disp-img-bg', p.bg)}</label>`
           : `<label class="disprow-dbl"><input type="checkbox" id="disp-inv" ${p.invert ? 'checked' : ''}> invert</label>
              ${colour ? pick('disp-img-ink', p.ink) + pick('disp-img-paper', p.paper) : ''}`}
       </div>
-      ${p.bad ? '<p class="small fault">Black on black cannot be drawn (§14.7).</p>' : ''}
+      ${p.bad ? '<p class="small fault">Black on black cannot be drawn. Pick another colour.</p>' : ''}
 
       <div class="group" style="margin-top:.5rem">
         ${p.dest === 'slot'
@@ -678,44 +692,47 @@ function inspectPicture(t, colour) {
       </div>
 
       ${p.dest === 'slot'
-        ? `<p class="muted small">Storing writes ${bytesLine(p)} at ascending offsets and commits with a
-             CRC — ${p.fmt === 'rgb565' ? 'a few seconds' : 'about a second'} of auxiliary slot, spent once.
-             The slot is erased the moment it starts and is not a picture again until the CRC passes,
-             so an interrupted store leaves it <strong>empty</strong>, never half drawn (§14.9).</p>`
-        : `<p class="muted small">Format, ink, paper and invert re-encode here for nothing; only
-             <strong>Send picture</strong> costs the ~180 ms of auxiliary slot it takes to put
-             ${p.rowChunks} chunks on the bus (§3.2) — and it costs that again every time.</p>`}
+        ? `<p class="muted small">Storing takes ${p.fmt === 'rgb565' ? 'a few seconds' : 'about a second'}, once.
+             If it is interrupted, the slot is left <strong>empty</strong>, never half drawn.</p>`
+        : `<p class="muted small">Change the colours here as often as you like. <strong>Send picture</strong>
+             takes about 0.2 s, every time it is sent.</p>`}
       ` : ''}
 
-      <p class="muted small">Streamed, a picture is ${t.pxW} × ${t.pxH} at <strong>one bit</strong>, dithered and
-        drawn in two colours of §14.7's palette: 2 KB and 0.15 s, against 32 KB and 2.3 s for the same
-        picture in colour (§14.8). ${slots
-          ? 'Stored, it can be <strong>full colour</strong> — the 32 KB crosses the bus once at configuration time and never again, because SHOW reads it from the tile\'s own flash (§14.9).'
-          : 'This tile has no picture store, so colour is not on offer: every picture it draws crosses the bus.'}</p>
-      <p class="muted small">A picture owns the panel until <strong>Clear</strong>, stored or streamed: it goes
-        at the glass with no commit, so text is not drawn over it.</p>
+      <p class="muted small">A picture sent now is drawn in <strong>two colours</strong> and has to be sent
+        again each time. ${slots
+          ? `A stored picture stays on the tile${canColour ? ', can be <strong>full colour</strong>,' : ''} and is shown instantly.`
+          : 'This tile cannot store pictures.'}</p>
+      <p class="muted small">A picture stays on the panel until you press <strong>Clear</strong>; text is not drawn over it.</p>
     </div>
 
     ${slots ? `
     <div>
       <div class="insp-title">Slots</div>
-      <p class="muted small">${slots} picture${slots === 1 ? '' : 's'} in the tile's own flash. Showing one is a single
-        frame, so a legend can change as often as a mode does.</p>
+      <p class="muted small">The tile keeps ${slots} picture${slots === 1 ? '' : 's'}. Showing one is instant, so a legend can
+        change as often as you like.</p>
+      <button id="slot-check">Check slots</button>
       ${Array.from({ length: slots }, (_, n) => {
-        const st = storedAt(t.addr, n);
+        const st = storedAt(t.addr, n), info = infoAt(t.addr, n), name = nameFor(t.addr, n);
         const live = on?.kind === 'slot' && on.slot === n;
+        const fmt = info && !info.empty ? info.fmt : st?.fmt;
+        const len = info && !info.empty ? info.len : st?.bytes;
+        const what = info?.empty
+          ? '<span class="muted">empty</span>'
+          : fmt
+            ? `${name ? esc(name) : '<span class="muted">a picture</span>'} — ${FMT[fmt].label}, ${(len / 1024).toFixed(1)} KB`
+            : '<span class="muted">not checked</span>';
+        const filled = info ? !info.empty : !!st;
         return `<div class="disprow">
           <span class="mono muted disprow-n">${n}</span>
-          <span class="small" style="flex:1">${st
-            ? `${st.name.replace(/</g, '&lt;')} — ${FMT[st.fmt].label}, ${st.bytes.toLocaleString()} B${live ? ' · on the panel' : ''}`
-            : '<span class="muted">not filled from this page</span>'}</span>
-          <button data-slot-show="${n}">Show</button>
+          <span class="small" style="flex:1">${what}${live ? ' · on the panel' : ''}</span>
+          <button data-slot-show="${n}" ${info?.empty ? 'disabled' : ''}>Show</button>
+          <button data-slot-load="${n}" ${filled ? '' : 'disabled'} title="read it back into the picture above">Load</button>
           <button data-slot-erase="${n}">Erase</button>
         </div>`;
       }).join('')}
-      <p class="muted small">What a slot holds is not readable — §14.9 has no command that asks — so this list
-        is what <em>this page</em> put there, not a read-back. Show on a slot the tile never had filled
-        comes back <code>args</code>.</p>
+      <p class="muted small"><strong>Check slots</strong> asks the tile what each slot holds.
+        <strong>Load</strong> copies a picture back into the editor above, so you can change it or store it again
+        without the original file. A colour picture takes several seconds to load.</p>
     </div>` : ''}`;
 }
 
@@ -750,12 +767,14 @@ function inspectRumble(t) {
   const row = (n) => {
     const b = bindFor(state.map, n);
     const here = b && b.addr === t.addr;
-    const st = b && storedAt(b.addr, b.slot);
+    const name = b && nameFor(b.addr, b.slot);
+    const info = b && infoAt(b.addr, b.slot);
     const hit = lastRumble?.code === n;
     const what = !b
       ? '<span class="muted">unbound</span>'
       : here
-        ? `slot ${b.slot} — ${st ? esc(st.name) : '<span class="muted">not filled from this page</span>'}`
+        ? `slot ${b.slot} — ${name ? esc(name) : info?.empty ? '<span class="muted">empty</span>'
+            : info ? '<span class="muted">a picture</span>' : '<span class="muted">not checked</span>'}`
         : `<span class="muted">tile ${b.addr} · slot ${b.slot}</span>`;
     return `<div class="disprow rumblerow ${b ? 'bound' : ''} ${hit ? 'hit' : ''}" data-code="${n}">
       <span class="mono disprow-n">${n}</span>
@@ -769,16 +788,16 @@ function inspectRumble(t) {
   };
 
   const calls = bound.map(b => {
-    const st = storedAt(b.addr, b.slot);
-    return `${showLegendCall(b.code).padEnd(22)}// tile ${b.addr}, slot ${b.slot}${st ? ` — ${st.name}` : ''}`;
+    const name = nameFor(b.addr, b.slot);
+    return `${showLegendCall(b.code).padEnd(22)}// tile ${b.addr}, slot ${b.slot}${name ? ` — ${name}` : ''}`;
   }).join('\n');
 
   return `
     <div>
       <div class="insp-title">Legend codes</div>
-      <p class="muted small">A board in <code>xinput</code> has no config channel during a match (§8.3).
-        <code>gamepad.rumble()</code> is the only way in, and a stored picture is switched by a number —
-        so one call changes this key's legend in one frame (§8.8).</p>
+      <p class="muted small">During a match the robot can reach the board only through
+        <code>gamepad.rumble()</code>. Bind a rumble code to a stored picture, and one call switches this
+        key's legend.</p>
 
       <div class="rumblelive" data-rumble-live>${liveLine()}</div>
       <p class="small" data-rumble-player>${playerLine()}</p>
@@ -791,15 +810,12 @@ function inspectRumble(t) {
               `<option value="${s}" ${(arming?.slot ?? 0) === s ? 'selected' : ''}>${s}</option>`).join('')}
           </select></label>
       </div>
-      <p class="muted small">Nothing is sent to the board while it waits: there is no <code>bind</code>
-        command for a code, because the module already reports every packet it decodes whether it is
-        bound or not. The buttons keep working throughout, unlike §9.6's bind mode.</p>
+      <p class="muted small">The buttons keep working while this page waits for a code.</p>
 
       ${codes.map(row).join('')}
       <p class="muted small">Codes 1–15. <strong>Zero is never a binding</strong> —
-        <code>rumble(0, 0, ms)</code> is how the SDK stops a rumble, and stopping one must not change
-        what is on a screen. A code with no entry does nothing, and so does one whose slot is empty:
-        a match is not the place to report a configuration error.</p>
+        <code>rumble(0, 0, ms)</code> is how the FTC SDK stops a rumble, and that must not change
+        what is on a screen. A code that is not bound, or whose slot is empty, does nothing.</p>
 
       <div class="insp-title" style="margin-top:.75rem">In the OpMode</div>
       ${bound.length ? `<pre class="ftccall">${esc(calls)}</pre>
@@ -807,14 +823,12 @@ function inspectRumble(t) {
         <button id="rumble-copy">Copy</button>
         <span class="muted small">${bound.length} code${bound.length === 1 ? '' : 's'} bound</span>
       </div>
-      <p class="muted small">From <code>robot/ftc/</code>'s <code>ButtonBoard</code>, which sends only on
-        change. Without it the call is
-        <code>${esc(rawRumbleCall(bound[0].code))}</code> — 255 / 15 is 17 exactly, so code <em>c</em>
-        arrives as <em>c</em> × 17 and is recovered as (v + 8) / 17.</p>`
+      <p class="muted small">These use the <code>ButtonBoard</code> helper class. Without it, the same
+        call is <code>${esc(rawRumbleCall(bound[0].code))}</code>.</p>`
       : '<p class="muted small">Bind a code and the exact call to put in the OpMode appears here.</p>'}
 
       ${mock ? `
-      <div class="insp-title" style="margin-top:.75rem">Fire a rumble (mock)</div>
+      <div class="insp-title" style="margin-top:.75rem">Send a rumble code (demo board)</div>
       <div class="btngrid">
         ${codes.map(n => `<button class="btncell" data-rfire="${n}" title="rumble(${n}/15.0, 0, ms) → byte ${wireByte(n)}">${n}</button>`).join('')}
       </div>
@@ -823,13 +837,10 @@ function inspectRumble(t) {
         <input type="number" id="rumble-raw" min="0" max="255" value="130" style="width:5rem">
         <button data-rfire="raw">send byte</button>
       </div>
-      <p class="muted small">The fake board takes the SDK's own doubles and converts them the way
-        <code>Gamepad.RumbleEffect</code> does, so this is the encoding and not a shortcut around it.
-        A raw byte shows the ±8 band: 130 is code 8 as surely as 136 is.</p>
-      <p class="notice small">On hardware the OUT endpoint exists only in <code>xinput</code>, and that
-        personality is single-interface today — so a real board that can receive a rumble has no config
-        channel to report it on until Phase 0.5 lands the CDC composite §8.3 reserves. Binding by doing
-        is a bench flow until then; binding by slot number works anywhere.</p>` : ''}
+      <p class="muted small">Sends a code to the demo board the way the robot would.</p>
+      <p class="notice small">A real board receives rumble codes only in <code>xinput</code> mode, and this
+        page cannot connect to it then. On a real board, choose a slot for each code from the list above
+        instead of <strong>Bind the next code</strong>.</p>` : ''}
     </div>`;
 }
 
@@ -849,8 +860,7 @@ function inspectDisp(t) {
       <div class="insp-title">Panel</div>
       <div class="insp-head"><strong>${t.cols} × ${t.rows}</strong>
         <span class="mono muted">${colour ? 'colour' : 'mono'} · tile ${t.addr}</span></div>
-      <p class="muted small">Geometry comes from the descriptor (§14.2), so this follows the tile rather
-        than the type. Text is clipped at ${t.cols} characters by the tile itself.</p>
+      <p class="muted small">Text longer than ${t.cols} characters is cut off.</p>
     </div>
 
     <div>
@@ -860,14 +870,14 @@ function inspectDisp(t) {
           <span class="mono muted disprow-n">${dbl ? `${r}+${r + 1}` : r}</span>
           <input type="text" data-disp="text" data-row="${r}" maxlength="${t.cols}"
                  value="${row.text.replace(/"/g, '&quot;')}" placeholder="row ${r}">
-          <label class="disprow-dbl" title="double height: uses this row and the next (§14.3)">
+          <label class="disprow-dbl" title="double height: uses this row and the next">
             <input type="checkbox" data-disp="double" data-row="${r}" ${row.double ? 'checked' : ''}>2×</label>
           ${pick('ink', r, row.ink)}${pick('paper', r, row.paper)}
           ${unrepresentable(row.ink, row.paper) ? '<span class="small fault">black on black</span>' : ''}
         </div>`).join('')}
       <p class="muted small">${colour
-        ? 'Ink and paper, not a raw attribute byte. Black ink has no palette index of its own — it is reached through inverse (§14.7), which this does for you.'
-        : 'Black and white only: this panel has no <code>CAP_DISP_COLOR</code>, and a tile without it refuses every colour bit (§14.7). Black on white is the inverse attribute of §14.3.'}</p>
+        ? 'Pick a text colour and a background colour for each row.'
+        : 'This panel is black and white only. Pick white on black or black on white for each row.'}</p>
     </div>
 
     <div>
@@ -876,9 +886,8 @@ function inspectDisp(t) {
         <button id="disp-send">Draw</button>
         <button id="disp-clear">Clear</button>
       </div>
-      <p class="muted small">Writes accumulate and a SHOW commits them, so the panel never tears
-        mid-update (§14.3). <code>disp</code> is fire-and-forget: an ok means the frame was queued for
-        the auxiliary slot, not that the tile has drawn it (§14.4).</p>
+      <p class="muted small"><strong>Draw</strong> updates every row at once, so the panel never shows a
+        half-finished change.</p>
     </div>
 
     ${takesImage(t) ? inspectPicture(t, colour) : ''}
@@ -887,8 +896,7 @@ function inspectDisp(t) {
     <div>
       <div class="insp-title">Contrast</div>
       <input type="range" id="disp-contrast" min="0" max="255" value="${draftFor(t).contrast ?? 143}" style="width:100%">
-      <p class="muted small">On a backlit panel this is the backlight rather than a contrast register
-        (§14.3), so 0 is dark. Applies at once; it is not part of a commit.</p>
+      <p class="muted small">On a backlit panel this sets the backlight, so 0 is dark. It applies straight away.</p>
     </div>`;
 }
 
@@ -924,7 +932,7 @@ function inspectEnc(t) {
                     title="${taken ? `already axis ${a} on tile ${owner.addr} ENC${owner.idx + 1}` : `axis ${a}`}">${a}</button>`;
         }).join('')}
       </div>
-      <p class="muted small">Four axes for the whole board (§15.5), so two encoder tiles claim them all.
+      <p class="muted small">The board has four axes in total, so two encoder tiles use them all.
         ${xinput ? 'This board is in <code>xinput</code>, which has no axes at all — the buttons below are what it will use.' : ''}</p>
       <p><label><input type="checkbox" id="invert" ${e.invert ? 'checked' : ''}> Invert — counter-clockwise counts up</label></p>
       <p><label>Scale <select id="scale">
@@ -942,10 +950,10 @@ function inspectEnc(t) {
       <div class="dirpick"><span class="muted small">clockwise</span> ${pick('cw')}</div>
       <div class="dirpick"><span class="muted small">anticlockwise</span> ${pick('ccw')}</div>
       <p class="muted small">${xinput
-        ? 'Required here: <code>xinput</code> can only carry a knob as a pair of pulsed buttons (§15.6).'
+        ? 'Required here: in <code>xinput</code> a knob can only send a short button press for each click.'
         : pulsed
-          ? 'With no axis, this encoder reports as pulsed buttons on this personality too (§15.6).'
-          : 'Optional under <code>frc</code>, where the axis is used instead. Setting them anyway is what lets one map work on both personalities.'}</p>
+          ? 'With no axis, this knob sends a short button press for each click in <code>frc</code> too.'
+          : 'Optional under <code>frc</code>, where the axis is used instead. Set them anyway and the same setup works in both modes.'}</p>
       ${e.axis && (e.cw || e.ccw) ? '<p class="muted small">Both set: the axis is used here, the buttons under <code>xinput</code>.</p>' : ''}
     </div>`;
 }
@@ -966,7 +974,7 @@ export function render(root) {
   if (t && sel.kind === 'disp' && !hasPanel(t)) { sel.kind = 'key'; sel.idx = 0; }
 
   if (!t) {
-    root.innerHTML = `<div style="padding:1.25rem"><p>No tiles on the bus. Check the chain and the terminators.</p></div>`;
+    root.innerHTML = `<div style="padding:1.25rem"><p>No tiles found. Check the cables between the main module and the tiles.</p></div>`;
     renderedSel = null;
     return;
   }
@@ -995,7 +1003,7 @@ export function render(root) {
           </button>`;
         }).join('')}
       </div>
-      <div class="rail-foot muted">Buttons on a lost tile read released (§0.1).</div>
+      <div class="rail-foot muted">If a tile stops answering, its buttons read as released.</div>
     </aside>
 
     <section class="cfg-canvas">
@@ -1004,7 +1012,7 @@ export function render(root) {
         <span class="mono muted">${t.type} · uid ${t.uid} · fw ${t.fw}</span>
       </div>
       <p class="muted">${t.keys || t.enc
-        ? `Click a key${t.enc ? ' or a knob' : ''} to bind it${hasPanel(t) ? ', or the panel to write to it' : ''}. Controls are laid out as they sit on the tile; K1 is the silkscreen's K1.`
+        ? `Click a key${t.enc ? ' or a knob' : ''} to bind it${hasPanel(t) ? ', or the panel to write to it' : ''}. Controls are laid out as they sit on the tile; K1 is the K1 printed on the tile.`
         : 'This tile has no keys — its panel is the whole of it. Type into the rows and draw.'}</p>
 
       <div class="tileview">
@@ -1201,7 +1209,7 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],#debounce-reset');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],#debounce-reset,#slot-check,[data-slot-load]');
     if (!el) return;
 
     if (el.id === 'debounce-reset') {
@@ -1260,7 +1268,7 @@ export function render(root) {
     if (el.id === 'disp-send') {
       const d = draftFor(t);
       const bad = panelRows(t).find(({ row }) => unrepresentable(row.ink, row.paper));
-      if (bad) return setStatus('Black on black cannot be drawn (§14.7)', 'fault');
+      if (bad) return setStatus('Black on black cannot be drawn', 'fault');
       try {
         let n = 0;
         for (const { r, row, dbl } of panelRows(t)) {
@@ -1278,7 +1286,7 @@ export function render(root) {
           n++;
         }
         if (n) await state.client.dispShow(t.addr);
-        setStatus(n ? `Queued ${n} row${n === 1 ? '' : 's'} for tile ${t.addr}` : 'Panel already matches', 'ok');
+        setStatus(n ? `Sent ${n} row${n === 1 ? '' : 's'} to tile ${t.addr}` : 'Panel already matches', 'ok');
       } catch (err) { setStatus(`Display: ${err.message}`, 'fault'); }
       return;
     }
@@ -1293,11 +1301,11 @@ export function render(root) {
         // a silence.
         let n = 0;
         for (const { row, hex } of chunks) {
-          setStatus(`Sending picture to tile ${t.addr} — chunk ${++n} of ${chunks.length}…`, 'ok');
+          setStatus(`Sending picture to tile ${t.addr} — ${Math.round(100 * ++n / chunks.length)} %`, 'ok');
           await state.client.dispImage(t.addr, row, p.attr, hex);
         }
         takePanel(t, { kind: 'stream', pic: snapshot(p) });
-        setStatus(`Picture sent to tile ${t.addr} — ${p.bits.length} B in ${chunks.length} chunks`, 'ok');
+        setStatus(`Picture sent to tile ${t.addr}`, 'ok');
       } catch (err) { setStatus(`Picture: ${err.message}`, 'fault'); }
       return render(root);
     }
@@ -1315,28 +1323,28 @@ export function render(root) {
       // page's record of the slot goes now rather than at the end: if the
       // store stops anywhere in between, the slot really is empty.
       stored.delete(`${t.addr}:${slot}`);
+      slotInfo.delete(`${t.addr}:${slot}`);
       if (glass.get(t.addr)?.kind === 'slot' && glass.get(t.addr).slot === slot) glass.delete(t.addr);
       try {
-        setStatus(`Storing ${p.name} in tile ${t.addr} slot ${slot} — ${chunks.length} chunks…`, 'ok');
+        setStatus(`Storing ${p.name} in tile ${t.addr} slot ${slot}…`, 'ok');
         await state.client.dispSlotStore(t.addr, slot, FMT[fmt].code, p.attr, chunks, crc,
           (done, total, n) => {
             // Every chunk is a DOM write otherwise, and 512 of them in a row
             // is the one place this page could make itself the bottleneck.
             const at = Math.round(done / 64);
             if (at % 8 && done < total) return;
-            setStatus(`Storing in tile ${t.addr} slot ${slot} — chunk ${at} of ${n}, `
-                      + `${Math.round(100 * done / total)} %`, 'ok');
+            setStatus(`Storing in tile ${t.addr} slot ${slot} — ${Math.round(100 * done / total)} %`, 'ok');
           });
         stored.set(`${t.addr}:${slot}`, { name: p.name, fmt, bytes: p.bytes.length, crc, pic: snapshot(p) });
-        setStatus(`Slot ${slot} on tile ${t.addr} holds ${p.name} — `
-                  + `${p.bytes.length.toLocaleString()} B, CRC ${crc}. Show it for one frame.`, 'ok');
+        slotInfo.set(`${t.addr}:${slot}`, { empty: false, fmt, attr: p.attr, len: p.bytes.length, crc });
+        setStatus(`Slot ${slot} on tile ${t.addr} holds ${p.name}. Press Show to put it on the panel`, 'ok');
       } catch (err) {
         // `flash` (and `crc`, which a stricter sender may see) is the one
         // error that does not mean "it did not go": it means the bytes
         // arrived changed, and §14.9 leaves the slot empty for it.
         setStatus(['flash', 'crc'].includes(err.message)
-          ? `Slot ${slot} on tile ${t.addr}: CRC mismatch, so the slot was left empty (§14.9)`
-          : `Slot ${slot}: ${err.message} — the slot is empty until a store finishes`, 'fault');
+          ? `Slot ${slot} on tile ${t.addr}: the picture arrived damaged, so the slot was left empty. Try again`
+          : `Slot ${slot}: ${err.message} — the slot stays empty until a store finishes`, 'fault');
       }
       return render(root);
     }
@@ -1350,9 +1358,70 @@ export function render(root) {
         takePanel(t, { kind: 'slot', slot, pic: st?.pic });
         setStatus(`Tile ${t.addr} showing slot ${slot}${st ? ` — ${st.name}` : ''}`, 'ok');
       } catch (err) {
+        if (err.message === 'args') slotInfo.set(`${t.addr}:${slot}`, { empty: true });
         setStatus(err.message === 'args'
-          ? `Slot ${slot} on tile ${t.addr} is empty, so there is nothing to show (§14.9)`
+          ? `Slot ${slot} on tile ${t.addr} is empty, so there is nothing to show`
           : `Slot ${slot}: ${err.message}`, 'fault');
+      }
+      return render(root);
+    }
+
+    // INFO for every slot (§14.9): one frame each, so a whole store is checked
+    // in well under a second.
+    if (el.id === 'slot-check') {
+      try {
+        for (let n = 0; n < slotCount(t); n++) {
+          setStatus(`Checking tile ${t.addr} slot ${n} of ${slotCount(t)}…`, 'ok');
+          const r = await state.client.dispSlotInfo(t.addr, n);
+          slotInfo.set(`${t.addr}:${n}`, r.empty ? { empty: true }
+            : { empty: false, fmt: r.fmt, attr: r.attr, len: r.len, crc: r.crc });
+        }
+        const used = Array.from({ length: slotCount(t) }, (_, n) => infoAt(t.addr, n)).filter(i => !i.empty).length;
+        setStatus(`Tile ${t.addr}: ${used} of ${slotCount(t)} slots hold a picture`, 'ok');
+      } catch (err) {
+        setStatus(err.message === 'args'
+          ? `Tile ${t.addr} cannot report its slots: update its firmware on the Firmware tab`
+          : `Check slots: ${err.message}`, 'fault');
+      }
+      return render(root);
+    }
+
+    // READ a stored picture back into the editor (§14.9), so it can be
+    // recoloured, re-encoded or stored again without the file it came from.
+    if (el.dataset.slotLoad != null) {
+      const slot = +el.dataset.slotLoad, key = `${t.addr}:${slot}`;
+      try {
+        setStatus(`Reading tile ${t.addr} slot ${slot}…`, 'ok');
+        const r = await state.client.dispSlotReadAll(t.addr, slot, (done, total) => {
+          if (done % 1024 && done < total) return;
+          setStatus(`Reading tile ${t.addr} slot ${slot} — ${Math.round(100 * done / total)} %`, 'ok');
+        });
+        if (!r) {
+          slotInfo.set(key, { empty: true });
+          setStatus(`Slot ${slot} on tile ${t.addr} is empty`, 'ok');
+          return render(root);
+        }
+        slotInfo.set(key, { empty: false, fmt: r.fmt, attr: r.attr, len: r.len, crc: r.crc });
+        // The editor works from a bitmap, so paint the stored pixels into one.
+        // A 1 bpp picture is painted black on white: the dither sets the dark
+        // pixels, so re-encoding gives back exactly the stored bits, and its
+        // own ink and paper come back as the editor's choices.
+        const canvas = new OffscreenCanvas(t.pxW, t.pxH);
+        if (r.fmt === 'rgb565') paintRgb565(canvas, r.bytes, t.pxW, t.pxH);
+        else paint1bpp(canvas, r.bytes, t.pxW, t.pxH, attrByte({ ink: 'black', paper: 'white' }));
+        const bitmap = await createImageBitmap(canvas);
+        const name = nameFor(t.addr, slot) ?? `slot ${slot} of tile ${t.addr}`;
+        const { ink, paper } = r.fmt === '1bpp' ? inkPaperOf(r.attr) : { ink: 'black', paper: 'white' };
+        dropPicture(t.addr);
+        pictures.set(t.addr, { bitmap, name, invert: false, dest: 'slot', fmt: r.fmt, slot, bg: 'black', ink, paper });
+        reencode(t);
+        stored.set(key, { name, fmt: r.fmt, bytes: r.len, crc: r.crc,
+                          pic: { fmt: r.fmt, attr: r.attr, bits: r.fmt === '1bpp' ? r.bytes : null, bytes: r.bytes } });
+        setStatus(`Loaded slot ${slot} from tile ${t.addr}. Change it, then store it again`, 'ok');
+      } catch (err) {
+        setStatus(err.message === 'args'
+          ? `Tile ${t.addr} cannot load slots: update its firmware on the Firmware tab`
+          : `Load slot ${slot}: ${err.message}`, 'fault');
       }
       return render(root);
     }
@@ -1362,6 +1431,7 @@ export function render(root) {
       try {
         await state.client.dispSlotErase(t.addr, slot);
         stored.delete(`${t.addr}:${slot}`);
+        slotInfo.set(`${t.addr}:${slot}`, { empty: true });
         const on = glass.get(t.addr);
         if (on?.kind === 'slot' && on.slot === slot) glass.delete(t.addr);
         setStatus(`Slot ${slot} on tile ${t.addr} erased`, 'ok');
@@ -1396,7 +1466,7 @@ export function render(root) {
       const a = +el.dataset.axis;
       const owner = axisOwner(a);
       if (a && owner && !(owner.addr === t.addr && owner.idx === sel.idx)) {
-        return setStatus(`Axis ${a} is already tile ${owner.addr} ENC${owner.idx + 1} (§15.5)`, 'fault');
+        return setStatus(`Axis ${a} is already tile ${owner.addr} ENC${owner.idx + 1}`, 'fault');
       }
       await pushMap(m => {
         m.enc = m.enc ?? [];
@@ -1418,7 +1488,7 @@ export function render(root) {
     if (el.id === 'turn') {
       const cur = encAt(t.addr, sel.idx);
       const axis = cur?.axis ?? AXES.find(a => !axisOwner(a));
-      if (!axis) return setStatus('All four axes are taken (§15.5)', 'fault');
+      if (!axis) return setStatus('All four axes are taken', 'fault');
       setStatus(`Turn the knob you want as axis ${axis}…`, 'fault');
       try {
         const r = await state.client.bindAxis(axis);

@@ -73,6 +73,18 @@ export function cssOf(attr) {
   return { ink, paper };
 }
 
+/**
+ * The ink and paper names an ATTR byte resolves to: `attrByte` backwards, for
+ * a picture read back from a slot (§14.9 READ) rather than chosen here.
+ */
+export function inkPaperOf(attr) {
+  const f = (attr >> ATTR_FG_SHIFT) & 7, b = (attr >> ATTR_BG_SHIFT) & 7;
+  let ink = f === 0 ? 'white' : NAMES[f];
+  let paper = b === 0 ? 'black' : NAMES[b];
+  if (attr & ATTR_INVERSE) [ink, paper] = [paper, ink];
+  return { ink, paper };
+}
+
 /** What the tile accepts in a TEXT op: printable ASCII only (§14.3). */
 export const ascii = (s) => [...String(s)].filter(c => c >= ' ' && c <= '~').join('');
 

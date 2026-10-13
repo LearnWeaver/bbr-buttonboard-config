@@ -47,7 +47,7 @@ export async function render(root) {
     else if (t.state !== 'online') action = `<span class="fwbtn none">tile ${t.state}</span>`;
     else if (offer) action = `<button class="fwbtn go" data-flash="${t.addr}">Update to ${c.img.fw}</button>`;
     else if (c) action = `<span class="fwbtn none">${c.newer ? 'update available' : 'up to date'}</span>`;
-    else action = '<span class="fwbtn none">no image</span>';
+    else action = '<span class="fwbtn none">no firmware available</span>';
 
     return `<div class="fwcard ${stale ? 'stale' : ''} ${t.state === 'lost' ? 'lost' : ''}">
       <div class="fwcard-top">
@@ -58,7 +58,7 @@ export async function render(root) {
         ${action}
       </div>
       ${running && progress ? `<div class="fwbar"><div class="fwfill" style="width:${Math.round(100 * progress.done / progress.total)}%"></div></div>
-        <div class="muted small fwnote">${progress.done} of ${progress.total} bytes · the other tiles are still being polled</div>` : ''}
+        <div class="muted small fwnote">${progress.done} of ${progress.total} bytes · the other tiles keep working</div>` : ''}
     </div>`;
   }).join('');
 
@@ -66,9 +66,9 @@ export async function render(root) {
   <div class="fw">
     <section class="fw-tiles">
       <h2>Tiles</h2>
-      <p class="muted">Pushed over the bus by the main module — no programmer. Images come from this site's
-        manifest${manifest ? ` (generated ${manifest.generated})` : ''}. The other tiles keep being polled throughout.</p>
-      ${manifestErr ? `<p class="notice risk">Could not load the firmware manifest: ${manifestErr}</p>` : ''}
+      <p class="muted">Sent through the main module and the tile cables, with no programmer needed. The firmware
+        comes with this site${manifest ? ` (built ${manifest.generated})` : ''}. The other tiles keep working during an update.</p>
+      ${manifestErr ? `<p class="notice risk">Could not load the list of firmware: ${manifestErr}</p>` : ''}
       <p><label><input type="checkbox" id="same" ${allowSame ? 'checked' : ''}> Allow reflashing the same or an older version</label></p>
       ${cards || '<p class="muted">No tiles on the bus.</p>'}
     </section>
@@ -85,7 +85,7 @@ export async function render(root) {
       </div>
       <p class="notice small"><strong>The COM port disappears.</strong>
         This page loses the board until the update is copied across and it restarts.</p>
-      <div class="insp-title">Config channel</div>
+      <div class="insp-title">Messages from the board</div>
       <pre class="log" id="fwlog">${logLines()}</pre>
     </aside>
   </div>`;
@@ -113,7 +113,7 @@ async function flashTile(root, addr) {
     const image = new Uint8Array(await r.arrayBuffer());
     const crc = hex16(crc16CcittFalse(image));
     if (image.length !== c.img.size || crc !== c.img.crc16.toUpperCase())
-      throw new Error(`image does not match manifest (size ${image.length}/${c.img.size}, crc ${crc}/${c.img.crc16})`);
+      throw new Error('the downloaded firmware is damaged — reload the page and try again');
     setStatus(`Updating tile ${addr} to ${c.img.fw}…`, 'fault');
     const res = await state.client.flash(addr, image, crc, (done, total) => {
       progress = { done, total };

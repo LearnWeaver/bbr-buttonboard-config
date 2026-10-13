@@ -10,8 +10,7 @@ import { connectBoard, setStatus, state } from '../app.js';
 export const wide = true;
 
 const XINPUT_WARNING = `Switching to xinput removes the config port this page talks over.
-You will not be able to reach the board from here again until you hold the CFG
-button while powering up, which forces the config personality (PROTOCOL.md §8.3).
+To reach the board from here again, hold its CFG button while plugging it in.
 
 Continue?`;
 
@@ -47,7 +46,7 @@ function disconnected() {
     </div>
 
     <p class="notice"><strong>A board set to <code>xinput</code> has no config port.</strong><br>
-      Hold the CFG button while powering up to force the config personality, then it will appear here.</p>`;
+      Hold its CFG button while plugging it in, and it will appear here.</p>`;
 }
 
 function connected(h) {
@@ -55,7 +54,7 @@ function connected(h) {
   const rows = [
     ['Product', h.product], ['Firmware', h.fw], ['Protocol', h.proto],
     ['Hardware', h.hw], ['Serial', h.serial], ['Tiles', h.tiles],
-    ['Map', h.mapValid ? 'valid' : 'none stored'], ['Mode', h.mode],
+    ['Saved setup', h.mapValid ? 'yes' : 'none'], ['Mode', h.mode],
   ];
   return `
     <h2 class="hero">Connected</h2>
@@ -67,20 +66,20 @@ function connected(h) {
         <table class="ident">${rows.map(([k, v]) => `<tr><th>${k}</th><td class="mono">${v}</td></tr>`).join('')}</table>
       </div>
       <div>
-        <div class="insp-title">USB personality</div>
-        <p class="muted small">What the board pretends to be. <code>frc</code> is a plain gamepad plus this
+        <div class="insp-title">USB mode</div>
+        <p class="muted small">What the board shows up as on the computer. <code>frc</code> is a plain gamepad plus this
           config port; <code>xinput</code> is an Xbox 360 pad, which is what the FTC Driver Station wants.</p>
         <p><select id="usb">
           ${['frc', 'xinput'].map(m => `<option value="${m}" ${h.usbSaved === m ? 'selected' : ''}>${m}</option>`).join('')}
         </select></p>
-        <p class="notice small"><strong>Choosing <code>xinput</code> closes this page's door.</strong>
-          The config port goes away with it, and only the CFG button held at power-up brings it back.</p>
+        <p class="notice small"><strong>Choosing <code>xinput</code> disconnects this page.</strong>
+          To connect again, hold the CFG button while plugging the board in.</p>
         ${'pixel' in h ? `
         <div class="insp-title">Status light</div>
         <p><label><input type="checkbox" id="pixel" ${h.pixel ? 'checked' : ''}>
           Flash the main module's light white on every button press</label></p>
         <p class="muted small">A quick way to see the board is sending presses, with no Driver Station
-          needed. Works in every personality, <code>xinput</code> included. Save to keep it after a power cycle.</p>`
+          needed. Works in both modes. Save to keep it after a power cycle.</p>`
           : ''}
         <p><button id="connect">Choose a different port</button></p>
       </div>
@@ -115,7 +114,7 @@ export function render(root) {
     try {
       await state.client.usb(mode);
       state.hello = await state.client.hello();
-      setStatus(`USB personality ${mode} pending — Save, then reset the board`, 'ok');
+      setStatus(`USB mode ${mode} — Save, then unplug the board and plug it back in`, 'ok');
       render(root);
     } catch (e) { setStatus(`USB: ${e.message}`, 'fault'); }
   };

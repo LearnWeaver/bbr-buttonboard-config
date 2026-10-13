@@ -35,7 +35,7 @@ function tilesView() {
 
 function countersView() {
   return `<table><thead><tr>
-      <th>Addr</th><th>Type</th><th>State</th><th>CRC errors</th><th>Missed polls</th><th>Last seen</th>
+      <th>Addr</th><th>Type</th><th>State</th><th>Checksum errors</th><th>Missed replies</th><th>Last seen</th>
     </tr></thead><tbody>
     ${rows().map(t => `<tr class="${t.state === 'lost' ? 'lost' : ''}">
       <td>${t.addr}</td><td>${t.type}</td><td>${t.state}</td>
@@ -44,7 +44,7 @@ function countersView() {
     </tr>`).join('')}
   </tbody></table>
   <p class="muted small">Counters run from the moment the board powered up, not from when this page opened.
-     A count climbing on one tile names the cable to replace.</p>`;
+     A count that keeps climbing on one tile points to a bad cable.</p>`;
 }
 
 function powerView() {
@@ -55,13 +55,12 @@ function powerView() {
     <table class="ident">
       <tr><th>Budget</th><td><input type="number" id="budget" min="100" max="4000" step="50" value="${p.budget}"> mA</td></tr>
       <tr><th>Worst case</th><td class="mono">${p.worst} mA <span class="muted">every LED white at once</span></td></tr>
-      <tr><th>Brightness cap</th><td class="mono">${p.brightness} <span class="muted">of 255, chosen by the board to stay inside the budget</span></td></tr>
+      <tr><th>Brightness cap</th><td class="mono">${p.brightness} <span class="muted">of 255, set by the board to stay inside the budget</span></td></tr>
       <tr><th>LEDs on the bus</th><td class="mono">${lit}</td></tr>
     </table>
     <p><button id="setbudget">Apply budget</button></p>
-    <p class="muted small">The board clamps brightness rather than browning out (§8.7). Raise the budget only
-      if the supply and the cable can actually carry it — the connector's doubled 5 V pins are sized for the
-      unclamped worst case, not for this number.</p>`;
+    <p class="muted small">The board dims the LEDs to stay inside the budget. Raise it only if the USB port
+      and cable can really supply that much current.</p>`;
 }
 
 export async function render(root) {
@@ -76,7 +75,7 @@ export async function render(root) {
   root.innerHTML = `
   <div class="diag">
     ${lost.length ? `<p class="notice risk"><strong>${lost.map(t => `Tile ${t.addr}`).join(', ')} ${lost.length === 1 ? 'is' : 'are'} lost.</strong>
-       ${lost.length === 1 ? 'Its' : 'Their'} buttons read released. Counters name the cable to replace.</p>` : ''}
+       ${lost.length === 1 ? 'Its' : 'Their'} buttons read released. The Counters view shows which cable to check.</p>` : ''}
 
     <div class="pills">
       ${VIEWS.map((v, i) => `<button class="pill ${i === view ? 'sel' : ''}" data-view="${i}">${v}</button>`).join('')}
@@ -86,11 +85,11 @@ export async function render(root) {
 
     <div class="card">
       <div class="card-head">
-        <strong>Report bench</strong>
+        <strong>Button test</strong>
         <span class="mono muted">${mode === 'off' ? 'test off' : mode === 'hold' ? `test hold ${held}` : `test ${mode}`}</span>
       </div>
-      <p class="muted">The board generates the gamepad report itself here, ignoring tiles and the map entirely,
-        so a Driver Station can be watched with nothing plugged into the bus.</p>
+      <p class="muted">The board presses buttons by itself here, ignoring the tiles and your bindings, so you can
+        check the Driver Station with no tiles plugged in.</p>
       <p class="benchbar">
         <button class="primary" data-mode="walk">Walk 1 → 32</button>
         <label>step <input type="number" id="ms" min="50" max="5000" step="50" value="250"> ms</label>
@@ -104,8 +103,8 @@ export async function render(root) {
       <div class="bench-pad">${padView({ attr: 'hold',
         cls: n => mode === 'all' || held === n ? 'down' : '',
         title: n => `Hold button ${n} · ${XINPUT_SLOTS[n - 1]}` })}</div>
-      <p class="notice small">Test mode ends the moment this page disconnects, so nothing can be left stuck on.
-        It is never saved and does not survive a reset.</p>
+      <p class="notice small">The test stops as soon as this page disconnects, so no button can be left stuck on.
+        It is never saved.</p>
     </div>
 
     <p class="mono muted diag-foot">
@@ -134,7 +133,7 @@ export async function render(root) {
       const ms = +root.querySelector('#ms').value;
       held = 0; return run(() => state.client.test('walk', ms), `Walking every ${ms} ms`);
     }
-    if (b.dataset.mode === 'all') { held = 0; return run(() => state.client.test('all'), 'All 32 asserted'); }
+    if (b.dataset.mode === 'all') { held = 0; return run(() => state.client.test('all'), 'All 32 buttons pressed'); }
     if (b.dataset.mode === 'off') { held = 0; return run(() => state.client.test('off'), 'Test stopped'); }
     if (b.dataset.hold) {
       const n = +b.dataset.hold;

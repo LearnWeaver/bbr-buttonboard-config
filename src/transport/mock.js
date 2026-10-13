@@ -21,6 +21,7 @@ const FLASH_ERASE_MS = 30;
 const FLASH_PROGRAM_MS = 0.7;
 // FMT 0x02 is two bytes a pixel; FMT 0x01 is §14.8's 1 bpp encoding.
 const SLOT_FMT = { '1bpp': 1, rgb565: 2 };
+const SLOT_READ_MAX = 16;   // READ returns 1..16 bytes: what fits inside T_RESP_MAX (§14.9)
 const AUX_SLOT_MS = 6;
 
 export class MockTransport {
@@ -315,8 +316,40 @@ export class MockTransport {
         this.auxQueue++;
         return err('flash', { slot: n, crc: w.crc });
       }
-      this.slots.set(key, { fmt: w.fmt, attr: w.attr, len: w.len, crc: w.crc });
+      const data = new Uint8Array(w.len);
+      let at = 0;
+      for (const c of w.data ?? []) { data.set(c, at); at += c.length; }
+      this.slots.set(key, { fmt: w.fmt, attr: w.attr, len: w.len, crc: w.crc, data });
       return aux();
+    }
+
+    // INFO and READ (§14.9 rev 0.35): the header, and the bytes, back. Both
+    // are refused on a slot mid-transfer -- ERR_BAD_STATE at the tile, which
+    // the module reports as `tile` -- and while the flash is busy.
+    if (op === 'info' || op === 'read') {
+      let off = 0, len = 0;
+      if (op === 'info' && a.length !== 4) return err('args');
+      if (op === 'read') {
+        if (a.length !== 6) return err('args');
+        off = +a[4]; len = +a[5];
+        if (!Number.isInteger(off) || off < 0 || off > 0xFFFF) return err('args');
+        if (!Number.isInteger(len) || len < 1 || len > SLOT_READ_MAX) return err('args');
+      }
+      if (mine) return err('tile', { nak: 3 });
+      if (flashBusy()) return err('busy');
+      if (this.auxQueue >= AUX_QUEUE_DEPTH) return err('busy');
+      const stored = this.slots.get(key);
+      if (op === 'info') {
+        this.auxQueue++;
+        if (!stored) return ok({ slot: n, empty: true });
+        return ok({ slot: n, empty: false, fmt: stored.fmt === 2 ? 'rgb565' : '1bpp',
+                    attr: stored.attr, len: stored.len, crc: stored.crc });
+      }
+      if (!stored || off + len > stored.len) return err('args', { nak: 4 });
+      this.auxQueue++;
+      const hex = [...stored.data.subarray(off, off + len)]
+        .map(b => b.toString(16).padStart(2, '0').toUpperCase()).join('');
+      return ok({ slot: n, off, hex });
     }
 
     if (op === 'show') {

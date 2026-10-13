@@ -60,12 +60,12 @@ export function geom(tile) {
 export function displayNote(tile) {
   if (!tile.cols || !tile.rows) return '';
   const colour = (tile.caps & CAP_DISP_COLOR) ? 'colour' : 'mono';
-  return `${tile.cols} × ${tile.rows} ${colour} character panel — written at run time over the config channel (§14.4)`;
+  return `${tile.cols} × ${tile.rows} ${colour} text panel — click it to write to it`;
 }
 
 // Encoders are not keys and are not in the POLL bitmap (PROTOCOL.md §15): the
 // keys a tile reports are the shaft pushes. Say so under the diagram rather
 // than drawing something that implies you can bind a detent here.
 export function encoderNote(tile) {
-  return tile.enc ? `${tile.enc} rotary encoder${tile.enc === 1 ? '' : 's'} → axes, bound separately` : '';
+  return tile.enc ? `${tile.enc} rotary encoder${tile.enc === 1 ? '' : 's'} — click a knob to bind it` : '';
 }
