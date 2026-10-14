@@ -6,7 +6,7 @@
 import { crc16Running } from '../util.js';
 import { defaultDebounce } from '../tilegeom.js';
 import { decodeXinputOut, rumblePacket, playerPacket, sdkByte, validateBinds,
-         bindsOf, applyLedActions } from '../rumble.js';
+         bindsOf, textsOf, isLedEntry, isTextEntry, applyLedActions, mapFits } from '../rumble.js';
 
 const AUX_QUEUE_DEPTH = 8;
 // RUMBLE_ACT_MIN_US from firmware/core/lineproto.h, in the milliseconds a
@@ -179,6 +179,15 @@ export class MockTransport {
       // §14.9 already makes the tile refuse SHOW on an empty slot, and the
       // refusal has no carrier: the glass keeps whatever was on it.
       if (this.slots.has(`${b.addr}:${b.slot}`)) t.showing = b.slot;
+    }
+    // Messages (rev 0.36): CLEAR, the rows the panel has, SHOW. The firmware
+    // feeds those steps through the queue as it drains; the mock, which does
+    // not model the steps, just puts the result on the glass.
+    for (const e of textsOf(this.map, { code: this.rumbleCode })) {
+      const tt = this.tiles.find(x => x.addr === e.addr);
+      if (!tt || tt.state !== 'online' || !tt.rows) continue;
+      delete tt.showing;
+      tt.text = Array.from({ length: tt.rows }, (_, r) => (e.rows[r] ?? '').slice(0, tt.cols));
     }
     this.rumbleCode = 0;
     this.rumbleNextAt = now + RUMBLE_ACT_MIN_MS;
@@ -414,16 +423,21 @@ export class MockTransport {
           // map.c: debounce keys are tile addresses 1..31, values 1..255 ms.
           for (const [addr, ms] of Object.entries(m.debounce ?? {}))
             if (!(+addr >= 1 && +addr <= 31) || !Number.isInteger(ms) || ms < 1 || ms > 255) return err('debounce');
-          // map.c's canonical emit: legends, then LED actions, each in the
-          // order given; hex upper case, 000000 as `off`, `fx` only when it
-          // is not solid and never on `map`.
+          // map.c's canonical emit: legends, then messages, then LED
+          // actions, each in the order given; hex upper case, 000000 as
+          // `off`, `fx` only when it is not solid and never on `map`, and a
+          // message's `attrs` only when one of them is set.
           if (Array.isArray(m.rumble)) {
             const led = (e) => {
               const rgb = e.rgb === 'map' || e.rgb === 'off' ? e.rgb : e.rgb.toUpperCase() === '000000' ? 'off' : e.rgb.toUpperCase();
               return { code: e.code, btn: e.btn, rgb, ...(rgb !== 'map' && e.fx && e.fx !== 'solid' ? { fx: e.fx } : {}) };
             };
-            m.rumble = [...bindsOf(m), ...m.rumble.filter(e => !bindsOf(m).includes(e)).map(led)];
+            const text = (e) => ({ code: e.code, addr: e.addr, rows: e.rows, ...((e.attrs ?? []).some(Boolean) ? { attrs: e.attrs } : {}) });
+            m.rumble = [...bindsOf(m), ...m.rumble.filter(isTextEntry).map(text), ...m.rumble.filter(isLedEntry).map(led)];
           }
+          // §9.1: a map whose canonical form will not fit one flash record
+          // is refused here rather than at `save`.
+          if (!mapFits(m)) return err('line_too_long');
           this.map = m;
           // lineproto.c: a tile reports its override, or its type's default.
           for (const t of this.tiles) t.debounce = m.debounce?.[t.addr] ?? defaultDebounce(t.type);

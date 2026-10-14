@@ -5,7 +5,7 @@
 // during a match the XInput OUT endpoint is the only door and
 // `gamepad.rumble(left, right, ms)` is the sanctioned OpMode call that knocks
 // on it. It cannot carry text. It carries a number, and a stored picture
-// (§14.9) is switched by a number.
+// (§14.9) or a prewritten message (rev 0.36) is switched by a number.
 //
 // Platform-free on purpose: no DOM, no client. `transport/mock.js` decodes
 // with it, `screens/configure.js` binds with it, and `tools/test_web.mjs`
@@ -59,20 +59,32 @@ export function decodeXinputOut(data) {
 
 // ---- the map's `rumble` section (§9.5) ------------------------------------
 
-// Two kinds of entry share the section (§8.8, rev 0.33): a **legend** names
-// {code, addr, slot}, an **LED action** names {code, btn, rgb[, fx]}. Every
-// helper below works on one kind and carries the other through untouched —
-// a legend helper that dropped a code's LED entries would be a map edit
-// nobody asked for.
+// Three kinds of entry share the section (§8.8): a **legend** names
+// {code, addr, slot}, a **message** (rev 0.36) names {code, addr, rows[,
+// attrs]}, and an **LED action** (rev 0.33) names {code, btn, rgb[, fx]}.
+// Every helper below works on one kind and carries the others through
+// untouched — a legend helper that dropped a code's LED entries would be a
+// map edit nobody asked for.
 export const isLedEntry = (e) => e != null && typeof e === 'object' && ('btn' in e || 'rgb' in e);
+export const isTextEntry = (e) => e != null && typeof e === 'object' && !isLedEntry(e) && ('rows' in e || 'attrs' in e);
+const isLegend = (e) => !isLedEntry(e) && !isTextEntry(e);
 const allOf = (list) => (Array.isArray(list) ? list : []);
 
 // The section's legend entries.
-export const bindsOf = (map) => allOf(map?.rumble).filter(e => !isLedEntry(e));
+export const bindsOf = (map) => allOf(map?.rumble).filter(isLegend);
 
 // Most LED entries a map may carry: MAP_RUMBLE_LED_MAX in firmware/core/map.h.
 export const RUMBLE_LED_MAX = 32;
 export const LED_FX = ['solid', 'blink', 'fast', 'breathe'];
+// Messages: MAP_RUMBLE_TEXT_MAX, and DISP_MAX_ROWS / DISP_MAX_COLS from
+// shared/protocol.h. The panel clips a message to its own size.
+export const RUMBLE_TEXT_MAX = 32;
+export const TEXT_ROWS_MAX = 8;
+export const TEXT_COLS_MAX = 32;
+// MAP_JSON_MAX: the canonical map JSON, NUL included, has to fit one flash
+// record, and `map set` refuses one that would not with `line_too_long`.
+export const MAP_JSON_MAX = 4064;
+export const mapFits = (map) => JSON.stringify(map).length < MAP_JSON_MAX;
 
 /**
  * The legend entry a code names, or null.
@@ -96,8 +108,8 @@ export function bindFor(map, code) {
 export function validateBinds(list) {
   if (list == null) return null;
   if (!Array.isArray(list)) return 'rumble';
-  const seen = new Set(), seenLed = new Set();
-  let leds = 0;
+  const seen = new Set(), seenLed = new Set(), seenText = new Set(), legendAt = new Set();
+  let leds = 0, texts = 0;
   for (const b of list) {
     if (!b || typeof b !== 'object') return 'rumble';
     const { code } = b;
@@ -105,7 +117,7 @@ export function validateBinds(list) {
     if (isLedEntry(b)) {
       // an LED action: one kind or the other, one per (code, btn)
       const { btn, rgb, fx } = b;
-      if ('addr' in b || 'slot' in b) return 'rumble';
+      if ('addr' in b || 'slot' in b || 'rows' in b || 'attrs' in b) return 'rumble';
       if (!Number.isInteger(btn) || btn < 1 || btn > 32) return 'rumble';
       if (!(rgb === 'off' || rgb === 'map' || (typeof rgb === 'string' && /^[0-9a-fA-F]{6}$/.test(rgb)))) return 'rumble';
       if (fx !== undefined && !LED_FX.includes(fx)) return 'rumble';
@@ -114,23 +126,42 @@ export function validateBinds(list) {
       if (++leds > RUMBLE_LED_MAX) return 'rumble';
       continue;
     }
-    const { addr, slot } = b;
+    const { addr } = b;
     if (!Number.isInteger(addr) || addr < 1 || addr > 31) return 'rumble';
+    if (isTextEntry(b)) {
+      // a message: rows of printable ASCII, attrs one per row if given, one
+      // per (code, tile), and not on a tile the code shows a picture on
+      const { rows, attrs } = b;
+      if ('slot' in b) return 'rumble';
+      if (!Array.isArray(rows) || rows.length < 1 || rows.length > TEXT_ROWS_MAX) return 'rumble';
+      if (!rows.every(r => typeof r === 'string' && r.length <= TEXT_COLS_MAX && /^[ -~]*$/.test(r))) return 'rumble';
+      if (attrs !== undefined && (!Array.isArray(attrs) || attrs.length !== rows.length ||
+          !attrs.every(a => Number.isInteger(a) && a >= 0 && a <= 255))) return 'rumble';
+      if (seenText.has(`${code}:${addr}`)) return 'rumble';
+      seenText.add(`${code}:${addr}`);
+      if (++texts > RUMBLE_TEXT_MAX) return 'rumble';
+      continue;
+    }
+    const { slot } = b;
     if (!Number.isInteger(slot) || slot < 0 || slot > 254) return 'rumble';
     if (seen.has(code)) return 'rumble';       // at most one legend per code
     seen.add(code);
+    legendAt.add(`${code}:${addr}`);
   }
+  for (const k of seenText) if (legendAt.has(k)) return 'rumble';
   return null;
 }
 
 /**
  * The section in the firmware's canonical order (map.c): legend entries
- * first, then LED actions. Each kind is sorted here — legends by code, LED
- * actions by code then button — so `map get` comes back in the order the
- * inspector lists them, and a map this page sends is the map it reads back.
+ * first, then messages, then LED actions. Each kind is sorted here — legends
+ * by code, messages by code then tile, LED actions by code then button — so
+ * `map get` comes back in the order the inspector lists them, and a map this
+ * page sends is the map it reads back.
  */
 const canonical = (list) => [
-  ...allOf(list).filter(e => !isLedEntry(e)).sort((a, b) => a.code - b.code),
+  ...allOf(list).filter(isLegend).sort((a, b) => a.code - b.code),
+  ...allOf(list).filter(isTextEntry).sort((a, b) => a.code - b.code || a.addr - b.addr),
   ...allOf(list).filter(isLedEntry).sort((a, b) => a.code - b.code || a.btn - b.btn),
 ];
 
@@ -138,14 +169,47 @@ const canonical = (list) => [
  * The list with `code`'s legend bound to (addr, slot) — replacing whatever
  * legend was on that code, because one per code is the rule and the UI
  * enforces it here rather than letting the board reject the map. The code's
- * LED actions stay.
+ * LED actions and its messages for other tiles stay; a message for the same
+ * tile goes, since the two would race for one panel.
  */
 export function withBind(list, code, addr, slot) {
-  return canonical([...allOf(list).filter(b => isLedEntry(b) || b.code !== code), { code, addr, slot }]);
+  return canonical([...allOf(list).filter(b => !(isLegend(b) && b.code === code) &&
+    !(isTextEntry(b) && b.code === code && b.addr === addr)), { code, addr, slot }]);
 }
 
 export function withoutBind(list, code) {
-  return canonical(allOf(list).filter(b => isLedEntry(b) || b.code !== code));
+  return canonical(allOf(list).filter(b => !(isLegend(b) && b.code === code)));
+}
+
+// ---- messages (§8.8, rev 0.36) ---------------------------------------------
+
+/** A map's messages, optionally only one tile's or one code's. */
+export function textsOf(map, { addr, code } = {}) {
+  return allOf(map?.rumble).filter(e => isTextEntry(e) &&
+    (addr === undefined || e.addr === addr) && (code === undefined || e.code === code));
+}
+
+export const textFor = (map, code, addr) => textsOf(map, { code, addr })[0] ?? null;
+
+/**
+ * The list with `code` writing `rows` (and `attrs`, one per row) to tile
+ * `addr`, replacing that pair's message and any picture legend the code had
+ * on the same tile. Trailing blank rows are dropped, and `attrs` too when
+ * every row is plain, which is how the firmware emits it.
+ */
+export function withText(list, code, addr, rows, attrs = []) {
+  let n = rows.length;
+  while (n > 1 && !rows[n - 1] && !(attrs[n - 1] ?? 0)) n--;
+  const e = { code, addr, rows: rows.slice(0, n) };
+  const a = Array.from({ length: n }, (_, i) => attrs[i] ?? 0);
+  if (a.some(Boolean)) e.attrs = a;
+  return canonical([...allOf(list).filter(x =>
+    !(isTextEntry(x) && x.code === code && x.addr === addr) &&
+    !(isLegend(x) && x.code === code && x.addr === addr)), e]);
+}
+
+export function withoutText(list, code, addr) {
+  return canonical(allOf(list).filter(x => !(isTextEntry(x) && x.code === code && x.addr === addr)));
 }
 
 // ---- LED actions (§8.8, rev 0.33) ------------------------------------------
@@ -192,6 +256,11 @@ export function applyLedActions(map, code, live) {
 // `robot/ftc/`'s wrapper. A user should never have to compute c / 15.0 by
 // hand, which is exactly what the config screen is for.
 export const showLegendCall = (code) => `board.showLegend(${code});`;
+
+/** Every code the map gives any action at all, ascending. */
+export function usedCodes(map) {
+  return [...new Set(allOf(map?.rumble).map(e => e.code))].filter(c => c >= 1 && c <= RUMBLE_CODE_MAX).sort((a, b) => a - b);
+}
 
 // The call underneath it, for someone who has not copied the wrapper in — and
 // for anyone checking the arithmetic against §8.8's table.

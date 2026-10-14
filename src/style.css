@@ -219,3 +219,16 @@ button.big:not(.primary):hover { border-color:var(--accent); color:var(--accent)
 .btncell.noslot { opacity:.45; }
 .btncell small { display:block; white-space:nowrap; font-size:.62rem; line-height:1; color:inherit; opacity:.8; }
 .bench-pad { max-width:340px; margin-top:.75rem; }
+
+/* Legends overview: one card per rumble code */
+.legends h2 { margin:0 0 .4rem; }
+.legend-card.unused { opacity:.6; }
+.legend-item { display:flex; align-items:flex-start; gap:.75rem; padding:.45rem 0; border-top:1px solid var(--rule); }
+.legend-item:first-of-type { border-top:0; }
+.legend-what { width:6.5rem; flex:none; font-size:.85rem; color:var(--muted); }
+.legend-body { flex:1; min-width:0; }
+.legend-body .chip { display:inline-block; margin:0 .3rem .3rem 0; }
+.minipanel { width:max-content; max-width:100%; overflow-x:auto; margin-top:.35rem;
+  background:#000; padding:3px; border-radius:3px; font:12px/1.25 ui-monospace, Menlo, monospace; }
+.mini-row { white-space:pre; padding:0 1px; }
+.mini-row.dbl { font-size:200%; line-height:1.2; }

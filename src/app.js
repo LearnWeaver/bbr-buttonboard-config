@@ -5,8 +5,9 @@ import * as connect from './screens/connect.js';
 import * as configure from './screens/configure.js';
 import * as diagnose from './screens/diagnose.js';
 import * as firmware from './screens/firmware.js';
+import * as legends from './screens/legends.js';
 
-const screens = { connect, configure, diagnose, firmware };
+const screens = { connect, configure, legends, diagnose, firmware };
 
 export const state = {
   client: null, transport: null, hello: null, tiles: [], map: null, dirty: false, screen: 'connect',

@@ -13,6 +13,7 @@ import { state, refreshMap, refreshTiles, setStatus, render as rerender } from '
 import { geom, encoderNote, displayNote, defaultDebounce, hasDebounce } from '../tilegeom.js';
 import { RUMBLE_CODE_MAX, bindFor, bindsOf, withBind, withoutBind,
          ledActionsOf, withLedAction, withoutLedAction, RUMBLE_LED_MAX, LED_FX,
+         textsOf, textFor, withText, withoutText, RUMBLE_TEXT_MAX,
          showLegendCall, rawRumbleCall, wireByte, sendValue } from '../rumble.js';
 import { XINPUT_SLOTS, padView, tinySlot } from '../xpad.js';
 import { attrByte, cssOf, isColor, ascii, unrepresentable, NAMES, CAP_DISP_COLOR, inkPaperOf,
@@ -60,6 +61,17 @@ let subscribedTo = null;   // the client these listeners are attached to
 // map state: nothing is sent until a colour is picked.
 let rledCode = 1;
 let rledFx = 'solid';
+// The code the Messages picker saves the panel's rows to (§8.8 rev 0.36).
+let msgCode = 1;
+
+/**
+ * Open this screen on one tile, from another screen: the Legends overview
+ * links each entry to the inspector that edits it. `kind` is 'disp' for the
+ * panel or 'key' for a key's robot colours.
+ */
+export function focusTile(addr, kind = 'disp', idx = 0) {
+  sel = { addr, kind, idx };
+}
 
 // 30 s with no code, the same patience §9.6 gives a key press.
 const ARM_TIMEOUT_MS = 30000;
@@ -271,14 +283,90 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
  * board may well have changed the glass; this says nothing either way.
  */
 function rumbleAct(code) {
+  let changed = false;
   const b = bindFor(state.map, code);
-  if (!b) return false;
-  const t = state.tiles.find(x => x.addr === b.addr);
-  if (!t || t.state !== 'online' || !slotCount(t) || b.slot >= slotCount(t)) return false;
-  const st = storedAt(b.addr, b.slot);
-  if (!st) return false;
-  takePanel(t, { kind: 'slot', slot: b.slot, pic: st.pic });
-  return true;
+  const t = b && state.tiles.find(x => x.addr === b.addr);
+  const st = t && t.state === 'online' && b.slot < slotCount(t) && storedAt(b.addr, b.slot);
+  if (st) { takePanel(t, { kind: 'slot', slot: b.slot, pic: st.pic }); changed = true; }
+  // A message (rev 0.36) clears the panel and writes its rows, so the
+  // preview becomes those rows -- which this page knows exactly, unlike a
+  // picture -- and any picture on the glass goes.
+  for (const e of textsOf(state.map, { code })) {
+    const tt = state.tiles.find(x => x.addr === e.addr);
+    if (!tt || tt.state !== 'online' || !hasPanel(tt)) continue;
+    drafts.set(tt.addr, messageRows(tt, e));
+    for (const r of drafts.get(tt.addr)) r.sent = true;
+    glass.delete(tt.addr);
+    changed = true;
+  }
+  return changed;
+}
+
+// ---- messages on rumble codes (§8.8, rev 0.36) ------------------------------
+//
+// A message is the panel's rows, saved under a code. The editor above IS the
+// message editor: write the rows, pick a code, save. Loading one puts it back
+// in the rows to change. Colours and double height are kept per row, as the
+// attribute byte the firmware stores.
+
+/** The editor's rows as a message: text and one attribute byte per row. */
+function rowsAsMessage(t) {
+  const rows = Array(t.rows).fill(''), attrs = Array(t.rows).fill(0);
+  // panelRows skips the row under a double-height one, which stays blank
+  for (const { r, row, dbl } of panelRows(t)) {
+    if (unrepresentable(row.ink, row.paper)) return null;
+    const a = attrByte({ ink: row.ink, paper: row.paper, double: dbl });
+    const text = ascii(row.text).slice(0, t.cols);
+    // A row with a visible background is padded to the panel's width, as Draw
+    // does, so the colour spans it. Anything else loses its trailing spaces:
+    // they cost bytes of the map and draw nothing after a CLEAR.
+    rows[r] = a & (0xE0 | 0x01) ? text.padEnd(t.cols) : text.replace(/\s+$/, '');
+    attrs[r] = a;
+  }
+  return { rows, attrs };
+}
+
+/** A message as editor rows, the inverse of rowsAsMessage. */
+function messageRows(t, e) {
+  return Array.from({ length: t.rows }, (_, r) => {
+    const a = e.attrs?.[r] ?? 0;
+    const { ink, paper } = inkPaperOf(a);
+    return { text: e.rows[r] ?? '', ink, paper, double: !!(a & 0x02) };
+  });
+}
+
+function messageSummary(e) {
+  const lines = e.rows.filter(Boolean);
+  if (!lines.length) return '<span class="muted">blank panel</span>';
+  return `<span class="mono">${esc(lines[0])}</span>${lines.length > 1 ? ` <span class="muted">+${lines.length - 1} row${lines.length > 2 ? 's' : ''}</span>` : ''}`;
+}
+
+function inspectMessages(t) {
+  const codes = Array.from({ length: RUMBLE_CODE_MAX }, (_, i) => i + 1);
+  const mine = textsOf(state.map, { addr: t.addr });
+  const full = textsOf(state.map).length >= RUMBLE_TEXT_MAX;
+  const pictureHere = (n) => { const b = bindFor(state.map, n); return b && b.addr === t.addr ? b : null; };
+  return `
+    <div>
+      <div class="insp-title">Messages</div>
+      <p class="muted small">Save the rows above under a rumble code, and <code>${esc(showLegendCall(msgCode))}</code>
+        puts them on this panel during a match. Load one back into the rows to change it.</p>
+      ${mine.length ? mine.map(e => `<div class="disprow rumblerow bound" data-code="${e.code}">
+        <span class="mono disprow-n">${e.code}</span>
+        <span class="small" style="flex:1;min-width:0">${messageSummary(e)}</span>
+        <button data-msg-load="${e.code}" title="put this message in the rows above">Load</button>
+        <button data-msg-del="${e.code}" title="remove">×</button>
+      </div>`).join('') : '<p class="muted small">No messages on this panel yet.</p>'}
+      <div class="group" style="margin-top:.4rem">
+        <label class="disprow-dbl">code
+          <select id="msg-code">
+            ${codes.map(n => `<option value="${n}" ${msgCode === n ? 'selected' : ''}>${n}${textFor(state.map, n, t.addr) ? ' ●' : pictureHere(n) ? ' (picture)' : ''}</option>`).join('')}
+          </select></label>
+        <button id="msg-save" ${full && !textFor(state.map, msgCode, t.addr) ? 'disabled' : ''}>${textFor(state.map, msgCode, t.addr) ? `Replace code ${msgCode}` : `Save as code ${msgCode}`}</button>
+      </div>
+      ${pictureHere(msgCode) ? `<p class="small notice">Code ${msgCode} shows picture slot ${pictureHere(msgCode).slot} on this panel. Saving a message replaces it.</p>` : ''}
+      <p class="muted small">A message clears the panel first, so rows left empty are blank.${full ? ` <strong>The board holds at most ${RUMBLE_TEXT_MAX} messages.</strong>` : ''}</p>
+    </div>`;
 }
 
 // ---- keeping your place across a rebuild -----------------------------------
@@ -770,8 +858,9 @@ function inspectRumble(t) {
     const name = b && nameFor(b.addr, b.slot);
     const info = b && infoAt(b.addr, b.slot);
     const hit = lastRumble?.code === n;
+    const msg = textFor(state.map, n, t.addr);
     const what = !b
-      ? '<span class="muted">unbound</span>'
+      ? (msg ? `<span class="muted">message:</span> ${messageSummary(msg)}` : '<span class="muted">unbound</span>')
       : here
         ? `slot ${b.slot} — ${name ? esc(name) : info?.empty ? '<span class="muted">empty</span>'
             : info ? '<span class="muted">a picture</span>' : '<span class="muted">not checked</span>'}`
@@ -890,6 +979,7 @@ function inspectDisp(t) {
         half-finished change.</p>
     </div>
 
+    ${inspectMessages(t)}
     ${takesImage(t) ? inspectPicture(t, colour) : ''}
     ${slotCount(t) ? inspectRumble(t) : ''}
 
@@ -1187,6 +1277,7 @@ export function render(root) {
       return;                              // no re-render: it would drop the picker
     }
     if (el.id === 'rled-code') { rledCode = +el.value; return render(root); }   // the call text follows
+    if (el.id === 'msg-code') { msgCode = +el.value; return render(root); }     // the button follows
     if (el.id === 'rled-fx') { rledFx = el.value; return; }
     if (el.dataset.disp) {
       const d = draftFor(t), r = +el.dataset.row;
@@ -1209,7 +1300,7 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],#debounce-reset,#slot-check,[data-slot-load]');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del]');
     if (!el) return;
 
     if (el.id === 'debounce-reset') {
@@ -1235,6 +1326,30 @@ export function render(root) {
         }, ARM_TIMEOUT_MS) };
         setStatus(`Send the code you want on slot ${slot} — rumble(c / 15.0, 0, ms)…`, 'fault');
       }
+      return render(root);
+    }
+
+    if (el.id === 'msg-save') {
+      const msg = rowsAsMessage(t);
+      if (!msg) return setStatus('Black on black cannot be drawn', 'fault');
+      const had = textFor(state.map, msgCode, t.addr), pic = bindFor(state.map, msgCode);
+      await pushMap(m => { m.rumble = withText(m.rumble, msgCode, t.addr, msg.rows, msg.attrs); },
+        `Code ${msgCode} → this message on tile ${t.addr}${had ? ' (replaced)' : ''}`
+        + (pic && pic.addr === t.addr ? ` instead of picture slot ${pic.slot}` : '') + ` — ${showLegendCall(msgCode)}`);
+      return render(root);
+    }
+    if (el.dataset.msgLoad) {
+      const e2 = textFor(state.map, +el.dataset.msgLoad, t.addr);
+      if (e2) {
+        drafts.set(t.addr, messageRows(t, e2));
+        msgCode = e2.code;
+        setStatus(`Code ${e2.code}'s message is in the rows. Draw shows it; Replace saves your changes`, 'ok');
+      }
+      return render(root);
+    }
+    if (el.dataset.msgDel) {
+      const code = +el.dataset.msgDel;
+      await pushMap(m => { m.rumble = withoutText(m.rumble, code, t.addr); }, `Code ${code}'s message on tile ${t.addr} removed`);
       return render(root);
     }
 
