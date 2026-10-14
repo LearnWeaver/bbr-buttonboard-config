@@ -251,7 +251,7 @@ async function pushMap(mutate, msg) {
   m.bind = m.bind ?? [];
   mutate(m);
   // §15.7: an entry with neither axis nor cw/ccw binds the encoder to nothing.
-  m.enc = (m.enc ?? []).filter(e => e.axis || e.cw || e.ccw);
+  m.enc = (m.enc ?? []).filter(e => e.axis || e.cw || e.ccw || e.trigger);
   if (!m.enc.length) delete m.enc;
   if (!(m.rumble ?? []).length) delete m.rumble;
   if (m.debounce && !Object.keys(m.debounce).length) delete m.debounce;
@@ -1040,11 +1040,26 @@ function inspectEnc(t) {
       <div class="dirpick"><span class="muted small">clockwise</span> ${pick('cw')}</div>
       <div class="dirpick"><span class="muted small">anticlockwise</span> ${pick('ccw')}</div>
       <p class="muted small">${xinput
-        ? 'Required here: in <code>xinput</code> a knob can only send a short button press for each click.'
+        ? 'In <code>xinput</code> a knob sends a short press of one of these per click, unless it counts on a trigger (below).'
         : pulsed
           ? 'With no axis, this knob sends a short button press for each click in <code>frc</code> too.'
           : 'Optional under <code>frc</code>, where the axis is used instead. Set them anyway and the same setup works in both modes.'}</p>
       ${e.axis && (e.cw || e.ccw) ? '<p class="muted small">Both set: the axis is used here, the buttons under <code>xinput</code>.</p>' : ''}
+    </div>
+
+    <div>
+      <div class="insp-title">Trigger (xinput)</div>
+      <div class="group">
+        ${[['', 'none'], ['lt', 'LT'], ['rt', 'RT']].map(([v, name]) => {
+          const owner = v && (state.map?.enc ?? []).find(x => x.trigger === v && !(x.addr === t.addr && x.idx === sel.idx));
+          return `<button class="chip ${(e.trigger ?? '') === v ? 'sel' : ''} ${owner ? 'taken' : ''}" data-trigger="${v}"
+                    title="${owner ? `already tile ${owner.addr} ENC${owner.idx + 1}` : name}">${name}</button>`;
+        }).join('')}
+      </div>
+      <p class="muted small">In <code>xinput</code> this knob can count on a trigger instead of pressing buttons:
+        each click moves the trigger by one step, wrapping at 256. Robot code reads it with the
+        <code>TriggerKnob</code> class: <code>knob.update(gamepad1.${e.trigger === 'rt' ? 'right' : 'left'}_trigger)</code>
+        gives the running count. That trigger then stops working as button ${e.trigger === 'rt' ? 16 : 15}.</p>
     </div>`;
 }
 
@@ -1300,7 +1315,7 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del]');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger]');
     if (!el) return;
 
     if (el.id === 'debounce-reset') {
@@ -1326,6 +1341,19 @@ export function render(root) {
         }, ARM_TIMEOUT_MS) };
         setStatus(`Send the code you want on slot ${slot} — rumble(c / 15.0, 0, ms)…`, 'fault');
       }
+      return render(root);
+    }
+
+    if (el.dataset.trigger !== undefined) {
+      const v = el.dataset.trigger;
+      const owner = v && (state.map?.enc ?? []).find(x => x.trigger === v && !(x.addr === t.addr && x.idx === sel.idx));
+      if (owner) return setStatus(`${v.toUpperCase()} is already tile ${owner.addr} ENC${owner.idx + 1}`, 'fault');
+      await pushMap(m => {
+        m.enc = m.enc ?? [];
+        let cur = m.enc.find(x => x.addr === t.addr && x.idx === sel.idx);
+        if (!cur) { cur = { addr: t.addr, idx: sel.idx }; m.enc.push(cur); }
+        if (v) cur.trigger = v; else delete cur.trigger;
+      }, v ? `ENC${sel.idx + 1} counts on ${v.toUpperCase()} in xinput (unsaved)` : 'Trigger cleared (unsaved)');
       return render(root);
     }
 

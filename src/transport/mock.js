@@ -418,6 +418,9 @@ export class MockTransport {
           // refuses it. A UI that lets two entries share a code has to find
           // out somewhere, and a mock that accepts one is the reason it
           // would find out on hardware instead.
+          // map.c: a trigger is lt or rt, and each has at most one encoder (§15.6 rev 0.37)
+          const trig = (m.enc ?? []).map(e => e.trigger).filter(x => x !== undefined);
+          if (trig.some(x => x !== 'lt' && x !== 'rt') || new Set(trig).size !== trig.length) return err('enc');
           const bad = validateBinds(m.rumble);
           if (bad) return err(bad);
           // map.c: debounce keys are tile addresses 1..31, values 1..255 ms.
@@ -463,8 +466,12 @@ export class MockTransport {
           this.bindPending = setTimeout(() => {
             const t = this.tiles.find(x => x.enc);
             const idx = Math.floor(Math.random() * t.enc);
-            this.map.enc = (this.map.enc ?? []).filter(x => x.axis !== axis && !(x.addr === t.addr && x.idx === idx));
-            this.map.enc.push({ axis, addr: t.addr, idx, invert: false });
+            // map_bind_axis: the axis leaves whoever had it, and the encoder
+            // keeps its other fields (direction buttons, trigger)
+            this.map.enc = (this.map.enc ?? []).map(x => x.axis === axis ? { ...x, axis: undefined } : x)
+              .filter(x => x.axis || x.cw || x.ccw || x.trigger);
+            const cur = this.map.enc.find(x => x.addr === t.addr && x.idx === idx);
+            if (cur) cur.axis = axis; else this.map.enc.push({ axis, addr: t.addr, idx, invert: false });
             this._emit({ ev: 'enc', addr: t.addr, idx, dir: 1 });
             this._emit({ ev: 'fault', on: false, why: 'none' });
             this.bindPending = null;
@@ -504,7 +511,9 @@ export class MockTransport {
       }
       case 'unbind': {
         if (a[0] === 'axis') {
-          this.map.enc = (this.map.enc ?? []).filter(x => x.axis !== +a[1]);
+          // map_unbind_axis: an entry that still has buttons or a trigger stays
+          this.map.enc = (this.map.enc ?? []).map(x => x.axis === +a[1] ? { ...x, axis: undefined } : x)
+            .filter(x => x.axis || x.cw || x.ccw || x.trigger);
           return ok();
         }
         const btn = +a[0];
