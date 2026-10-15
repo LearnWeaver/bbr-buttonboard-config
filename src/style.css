@@ -89,7 +89,11 @@ main.wide { padding:0; max-width:none; overflow:hidden; }
 .btncell { padding:.25rem 0; font:inherit; font-size:.85rem; border:1px solid var(--rule); background:var(--surface); color:var(--muted); border-radius:3px; cursor:pointer; }
 .btncell.used { color:var(--ink); }
 .btncell.sel { border-color:var(--accent); background:var(--accent); color:#fff; }
-.swatches { display:flex; gap:6px; align-items:center; }
+.swatches { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.ledpick { width:28px; height:28px; border-radius:4px; border:1px dashed var(--rule); cursor:pointer;
+           background:conic-gradient(red, yellow, lime, cyan, blue, magenta, red); position:relative; overflow:hidden; }
+.ledpick.sel { outline:2px solid var(--ink); outline-offset:1px; }
+.ledpick input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; border:0; padding:0; }
 .ledsw { width:28px; height:28px; border-radius:4px; border:1px solid var(--rule); cursor:pointer; }
 .ledsw.sel { outline:2px solid var(--ink); outline-offset:1px; }
 .ledsw.off { background:var(--surface); border:1px solid var(--rule); color:var(--muted); }

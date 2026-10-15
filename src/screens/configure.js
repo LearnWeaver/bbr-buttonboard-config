@@ -23,7 +23,24 @@ import { attrByte, cssOf, isColor, ascii, unrepresentable, NAMES, CAP_DISP_COLOR
 export const wide = true;
 export const live = true;
 
-const PALETTE = ['D9480F', '2C6E49', '1D4E89', 'A32B2B', '6B7683', 'FFFFFF'];
+// Key colours as an RGB LED shows them: full-strength hues, since a WS2812
+// renders a muted screen colour as a dim, tinted one. The global brightness
+// cap (§8.7) does the dimming. Anything else is one click away in the picker.
+const PALETTE = [
+  ['FF0000', 'red'], ['FF4000', 'orange'], ['FFA000', 'amber'], ['FFFF00', 'yellow'],
+  ['80FF00', 'lime'], ['00FF00', 'green'], ['00FF80', 'spring green'], ['00FFFF', 'cyan'],
+  ['0080FF', 'sky blue'], ['0000FF', 'blue'], ['8000FF', 'violet'], ['FF00FF', 'magenta'],
+  ['FF0060', 'pink'], ['FFFFFF', 'white'], ['FFB060', 'warm white'], ['303030', 'dim white'],
+];
+const swatchesOf = (attr, cur, disabled = '') =>
+  PALETTE.map(([c, name]) => `<button class="ledsw ${cur === c ? 'sel' : ''}" ${attr}="${c}" title="${name}"
+      style="background:#${c}" ${disabled}></button>`).join('');
+// The picker shows the current colour when it is not one of the swatches.
+const pickerOf = (attr, cur, disabled = '') => {
+  const custom = cur && /^[0-9A-F]{6}$/i.test(cur) && !PALETTE.some(([c]) => c === cur.toUpperCase());
+  return `<label class="ledpick ${custom ? 'sel' : ''}" title="any colour" ${custom ? `style="background:#${cur}"` : ''}>
+      <input type="color" ${attr} value="#${custom ? cur : 'ffffff'}" ${disabled}></label>`;
+};
 const FX = ['solid', 'blink', 'fast', 'breathe'];
 const AXES = [1, 2, 3, 4];                       // ENC_AXIS_COUNT, §15.5
 // Axis counts per click (§15.4). The FRC Driver Station sends each axis to
@@ -638,7 +655,8 @@ function inspectKey(t) {
 function ledPicker(entry) {
   return `
       <div class="swatches">
-        ${PALETTE.map(c => `<button class="ledsw ${entry.rgb === c ? 'sel' : ''}" data-rgb="${c}" style="background:#${c}"></button>`).join('')}
+        ${swatchesOf('data-rgb', entry.rgb)}
+        ${pickerOf('data-rgb-pick', entry.rgb)}
         <button class="ledsw off" data-rgb="off" title="off">∅</button>
       </div>
       <div class="group" style="margin-top:.6rem">
@@ -692,7 +710,8 @@ function robotColour(t, btn) {
           </select></label>
       </div>
       <div class="swatches" style="margin-top:.4rem">
-        ${PALETTE.map(c => `<button class="ledsw" data-rled-rgb="${c}" style="background:#${c}" ${full ? 'disabled' : ''}></button>`).join('')}
+        ${swatchesOf('data-rled-rgb', null, full ? 'disabled' : '')}
+        ${pickerOf('data-rled-pick', null, full ? 'disabled' : '')}
         <button class="ledsw off" data-rled-rgb="off" title="off" ${full ? 'disabled' : ''}>∅</button>
         <button class="chip" data-rled-rgb="map" title="back to the default colour" ${full ? 'disabled' : ''}>normal</button>
       </div>
@@ -1197,6 +1216,14 @@ export function render(root) {
 
   root.onchange = async (e) => {
     const el = e.target;
+    // A picked colour goes the same way as a swatch click: hand the click
+    // handler a stand-in swatch carrying it.
+    if (el.dataset.rgbPick !== undefined || el.dataset.rledPick !== undefined) {
+      const swatch = document.createElement('button');
+      const hex = el.value.slice(1).toUpperCase();
+      if (el.dataset.rgbPick !== undefined) swatch.dataset.rgb = hex; else swatch.dataset.rledRgb = hex;
+      return root.onclick({ target: swatch });
+    }
     if (el.id === 'debounce') {
       const v = Math.round(+el.value);
       if (!(v >= 1 && v <= 255)) { setStatus('Debounce is 1 to 255 ms', 'fault'); return render(root); }
