@@ -61,11 +61,18 @@ export function decodeXinputOut(data) {
 
 // Three kinds of entry share the section (§8.8): a **legend** names
 // {code, addr, slot}, a **message** (rev 0.36) names {code, addr, rows[,
-// attrs]}, and an **LED action** (rev 0.33) names {code, btn, rgb[, fx]}.
+// attrs]}, and an **LED action** (rev 0.33) names {code, btn, rgb[, fx]} —
+// or, from rev 0.38, {code, addr, led, rgb[, fx]} for one LED by tile and
+// index, so a key bound to no button can still be an indicator.
 // Every helper below works on one kind and carries the others through
 // untouched — a legend helper that dropped a code's LED entries would be a
 // map edit nobody asked for.
-export const isLedEntry = (e) => e != null && typeof e === 'object' && ('btn' in e || 'rgb' in e);
+export const isLedEntry = (e) => e != null && typeof e === 'object' && ('btn' in e || 'led' in e || 'rgb' in e);
+const isTileLed = (e) => 'led' in e && !('btn' in e);
+// What an LED action recolours, as one comparable key, and the target given
+// to the helpers below: a button number, or {addr, led} for a tile LED.
+const targetKey = (e) => isTileLed(e) ? `t${e.addr}.${e.led}` : `b${e.btn}`;
+const asTarget = (t) => typeof t === 'number' ? { btn: t } : { addr: t.addr, led: t.led };
 export const isTextEntry = (e) => e != null && typeof e === 'object' && !isLedEntry(e) && ('rows' in e || 'attrs' in e);
 const isLegend = (e) => !isLedEntry(e) && !isTextEntry(e);
 const allOf = (list) => (Array.isArray(list) ? list : []);
@@ -115,14 +122,21 @@ export function validateBinds(list) {
     const { code } = b;
     if (!Number.isInteger(code) || code < 1 || code > RUMBLE_CODE_MAX) return 'rumble';
     if (isLedEntry(b)) {
-      // an LED action: one kind or the other, one per (code, btn)
-      const { btn, rgb, fx } = b;
-      if ('addr' in b || 'slot' in b || 'rows' in b || 'attrs' in b) return 'rumble';
-      if (!Number.isInteger(btn) || btn < 1 || btn > 32) return 'rumble';
+      // an LED action: one kind or the other, one per (code, btn) or, on a
+      // tile LED (rev 0.38), one per (code, addr, led)
+      const { btn, addr, led, rgb, fx } = b;
+      if ('slot' in b || 'rows' in b || 'attrs' in b) return 'rumble';
+      if (isTileLed(b)) {
+        if (!Number.isInteger(addr) || addr < 1 || addr > 31) return 'rumble';
+        if (!Number.isInteger(led) || led < 0 || led > 31) return 'rumble';
+      } else {
+        if ('addr' in b || 'led' in b) return 'rumble';
+        if (!Number.isInteger(btn) || btn < 1 || btn > 32) return 'rumble';
+      }
       if (!(rgb === 'off' || rgb === 'map' || (typeof rgb === 'string' && /^[0-9a-fA-F]{6}$/.test(rgb)))) return 'rumble';
       if (fx !== undefined && !LED_FX.includes(fx)) return 'rumble';
-      if (seenLed.has(`${code}:${btn}`)) return 'rumble';
-      seenLed.add(`${code}:${btn}`);
+      if (seenLed.has(`${code}:${targetKey(b)}`)) return 'rumble';
+      seenLed.add(`${code}:${targetKey(b)}`);
       if (++leds > RUMBLE_LED_MAX) return 'rumble';
       continue;
     }
@@ -155,14 +169,16 @@ export function validateBinds(list) {
 /**
  * The section in the firmware's canonical order (map.c): legend entries
  * first, then messages, then LED actions. Each kind is sorted here — legends
- * by code, messages by code then tile, LED actions by code then button — so
+ * by code, messages by code then tile, LED actions by code then button, with
+ * tile LEDs after the buttons by tile then index — so
  * `map get` comes back in the order the inspector lists them, and a map this
  * page sends is the map it reads back.
  */
 const canonical = (list) => [
   ...allOf(list).filter(isLegend).sort((a, b) => a.code - b.code),
   ...allOf(list).filter(isTextEntry).sort((a, b) => a.code - b.code || a.addr - b.addr),
-  ...allOf(list).filter(isLedEntry).sort((a, b) => a.code - b.code || a.btn - b.btn),
+  ...allOf(list).filter(isLedEntry).sort((a, b) => a.code - b.code ||
+    isTileLed(a) - isTileLed(b) || (a.btn ?? 0) - (b.btn ?? 0) || (a.addr ?? 0) - (b.addr ?? 0) || (a.led ?? 0) - (b.led ?? 0)),
 ];
 
 /**
@@ -215,41 +231,50 @@ export function withoutText(list, code, addr) {
 // ---- LED actions (§8.8, rev 0.33) ------------------------------------------
 
 /** A map's LED actions, optionally only one button's or one code's. */
-export function ledActionsOf(map, { btn, code } = {}) {
+export function ledActionsOf(map, { btn, addr, led, code } = {}) {
   return allOf(map?.rumble).filter(e => isLedEntry(e) &&
-    (btn === undefined || e.btn === btn) && (code === undefined || e.code === code));
+    (btn === undefined || e.btn === btn) &&
+    (addr === undefined || (isTileLed(e) && e.addr === addr && e.led === led)) &&
+    (code === undefined || e.code === code));
 }
 
 /**
- * The list with `code` setting `btn` to `rgb` (6 hex, `off` or `map`),
- * replacing that pair's entry if it had one. `fx` is dropped when it is
+ * The list with `code` setting `target` to `rgb` (6 hex, `off` or `map`),
+ * replacing that pair's entry if it had one. `target` is a button number, or
+ * {addr, led} for one tile LED (rev 0.38). `fx` is dropped when it is
  * `solid` or the colour is `map`, which is how the firmware emits it.
  */
-export function withLedAction(list, code, btn, rgb, fx = 'solid') {
-  const e = { code, btn, rgb: rgb === 'off' || rgb === 'map' ? rgb : rgb.toUpperCase() };
+export function withLedAction(list, code, target, rgb, fx = 'solid') {
+  const e = { code, ...asTarget(target), rgb: rgb === 'off' || rgb === 'map' ? rgb : rgb.toUpperCase() };
   if (rgb !== 'map' && fx && fx !== 'solid') e.fx = fx;
-  return canonical([...allOf(list).filter(x => !(isLedEntry(x) && x.code === code && x.btn === btn)), e]);
+  const k = targetKey(e);
+  return canonical([...allOf(list).filter(x => !(isLedEntry(x) && x.code === code && targetKey(x) === k)), e]);
 }
 
-export function withoutLedAction(list, code, btn) {
-  return canonical(allOf(list).filter(x => !(isLedEntry(x) && x.code === code && x.btn === btn)));
+export function withoutLedAction(list, code, target) {
+  const k = targetKey(asTarget(target));
+  return canonical(allOf(list).filter(x => !(isLedEntry(x) && x.code === code && targetKey(x) === k)));
 }
 
 /**
  * What a code does to the live LED layer, as `lineproto.c`'s rumble_leds()
- * does it: each entry is `led <btn> <rgb> [fx]`, and `map` drops the button's
- * override. `live` is a Map of btn -> {rgb, fx}; returns the buttons touched.
+ * does it: each entry is `led <btn> <rgb> [fx]` (or `led tile <addr> <led>`),
+ * and `map` drops the override. `live` is a Map keyed by button number, or by
+ * `tile:<addr>:<led>` for a tile LED, of {rgb, fx}; returns the keys touched.
  */
 export function applyLedActions(map, code, live) {
   if (!(code >= 1 && code <= RUMBLE_CODE_MAX)) return [];
   const touched = [];
   for (const e of ledActionsOf(map, { code })) {
-    if (e.rgb === 'map') live.delete(e.btn);
-    else live.set(e.btn, { rgb: e.rgb === 'off' ? '000000' : e.rgb.toUpperCase(), fx: e.fx ?? 'solid' });
-    touched.push(e.btn);
+    const key = isTileLed(e) ? liveTileKey(e.addr, e.led) : e.btn;
+    if (e.rgb === 'map') live.delete(key);
+    else live.set(key, { rgb: e.rgb === 'off' ? '000000' : e.rgb.toUpperCase(), fx: e.fx ?? 'solid' });
+    touched.push(key);
   }
   return touched;
 }
+
+export const liveTileKey = (addr, led) => `tile:${addr}:${led}`;
 
 // ---- what a team types into an OpMode -------------------------------------
 

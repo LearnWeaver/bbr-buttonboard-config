@@ -64,7 +64,7 @@ function codeCard(code) {
   if (leds.length) {
     items.push(`<div class="legend-item">
       <div class="legend-what">Key colours</div>
-      <div class="legend-body">${leds.map(l => `<span class="chip">Button ${l.btn}
+      <div class="legend-body">${leds.map(l => `<span class="chip">${'btn' in l ? `Button ${l.btn}` : `${tileName(l.addr)} K${l.led + 1}`}
         ${l.rgb === 'map' ? '<span class="muted">back to normal</span>'
           : `<span class="keycell-led" style="display:inline-block;vertical-align:middle;background:#${l.rgb === 'off' ? '000' : esc(l.rgb)}"></span>
              ${l.rgb === 'off' ? 'off' : `#${esc(l.rgb)}`}`}${l.fx && l.fx !== 'solid' ? ` · ${esc(l.fx)}` : ''}</span>`).join(' ')}</div>

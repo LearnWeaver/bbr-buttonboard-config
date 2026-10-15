@@ -6,7 +6,7 @@
 import { crc16Running } from '../util.js';
 import { defaultDebounce } from '../tilegeom.js';
 import { decodeXinputOut, rumblePacket, playerPacket, sdkByte, validateBinds,
-         bindsOf, textsOf, isLedEntry, isTextEntry, applyLedActions, mapFits } from '../rumble.js';
+         bindsOf, textsOf, isLedEntry, isTextEntry, applyLedActions, liveTileKey, mapFits } from '../rumble.js';
 
 const AUX_QUEUE_DEPTH = 8;
 // RUMBLE_ACT_MIN_US from firmware/core/lineproto.h, in the milliseconds a
@@ -101,7 +101,7 @@ export class MockTransport {
     // code's LED actions write and `led reset` clears. There is no command
     // that reads it back, so only tests look at it -- but a rumble LED action
     // is only checkable against a layer it can land in.
-    this.ledLive = new Map();      // btn -> {rgb, fx}
+    this.ledLive = new Map();      // btn, or `tile:<addr>:<led>` -> {rgb, fx}
     setInterval(() => this._tick(), 400);
   }
   onLine(cb) { this.lineCb = cb; }
@@ -433,7 +433,8 @@ export class MockTransport {
           if (Array.isArray(m.rumble)) {
             const led = (e) => {
               const rgb = e.rgb === 'map' || e.rgb === 'off' ? e.rgb : e.rgb.toUpperCase() === '000000' ? 'off' : e.rgb.toUpperCase();
-              return { code: e.code, btn: e.btn, rgb, ...(rgb !== 'map' && e.fx && e.fx !== 'solid' ? { fx: e.fx } : {}) };
+              const at = 'btn' in e ? { btn: e.btn } : { addr: e.addr, led: e.led };   // rev 0.38: a tile LED
+              return { code: e.code, ...at, rgb, ...(rgb !== 'map' && e.fx && e.fx !== 'solid' ? { fx: e.fx } : {}) };
             };
             const text = (e) => ({ code: e.code, addr: e.addr, rows: e.rows, ...((e.attrs ?? []).some(Boolean) ? { attrs: e.attrs } : {}) });
             m.rumble = [...bindsOf(m), ...m.rumble.filter(isTextEntry).map(text), ...m.rumble.filter(isLedEntry).map(led)];
@@ -605,9 +606,17 @@ export class MockTransport {
         return aux();
       }
       case 'led': {
-        // Only the per-button form and `reset`/`all` touch the layer this
-        // fake keeps; `led tile` is accepted and forgotten.
+        // The per-button form, `led tile` (keyed as applyLedActions keys a
+        // tile LED) and `reset`/`all` touch the layer this fake keeps.
         if (a[0] === 'reset' || a[0] === 'all') { this.ledLive.clear(); return ok(); }
+        if (a[0] === 'tile') {
+          const addr = +a[1], led = +a[2];
+          if (!(addr >= 1 && addr <= 31 && led >= 0 && led <= 31 && a[3])) return err('args');
+          if (a[3] !== 'off' && !/^[0-9a-fA-F]{6}$/.test(a[3])) return err('args');
+          this.ledLive.set(liveTileKey(addr, led), { rgb: a[3] === 'off' ? '000000' : a[3].toUpperCase(),
+                                                     fx: ['blink', 'fast', 'breathe'].find(f => a.includes(f)) ?? 'solid' });
+          return ok();
+        }
         const btn = +a[0];
         if (Number.isInteger(btn) && btn >= 1 && btn <= 32 && a[1]) {
           if (a[1] !== 'off' && !/^[0-9a-fA-F]{6}$/.test(a[1])) return err('args');

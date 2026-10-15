@@ -568,6 +568,8 @@ function inspectKey(t) {
   const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
   const led = state.map?.led ?? {};
   const ledOf = (btn) => (btn && led.btn?.[btn]) || {};
+  const own = ownLed(t.addr, sel.idx);
+  const hasLed = (t.leds ?? 0) > sel.idx;
   const xinput = state.hello?.usb === 'xinput';
   return `
     <div>
@@ -619,31 +621,50 @@ function inspectKey(t) {
     <div>
       <div class="insp-title">LED</div>
       ${cur ? `
+      ${ledPicker(ledOf(cur))}
+      <p class="muted small">The colour belongs to the button, so it moves with the button if you bind it to another key.</p>`
+      : hasLed ? `
+      ${ledPicker(own)}
+      <p class="muted small">This key has no button, so the colour is the key's own: it stays lit with or without a
+        keycap, which makes the key an indicator light. Give it a robot colour below to change it during a match.</p>`
+      : '<p class="muted small">This tile has no LED under its keys.</p>'}
+    </div>
+    ${cur ? robotColour(t, cur) : hasLed ? robotColour(t, null) : ''}`;
+}
+
+// Colour swatches and effects for one LED's default. An effect needs a
+// colour to go with it (§9.5 refuses an led entry with no rgb), so the
+// effects wait until there is one.
+function ledPicker(entry) {
+  return `
       <div class="swatches">
-        ${PALETTE.map(c => `<button class="ledsw ${ledOf(cur).rgb === c ? 'sel' : ''}" data-rgb="${c}" style="background:#${c}"></button>`).join('')}
+        ${PALETTE.map(c => `<button class="ledsw ${entry.rgb === c ? 'sel' : ''}" data-rgb="${c}" style="background:#${c}"></button>`).join('')}
         <button class="ledsw off" data-rgb="off" title="off">∅</button>
       </div>
       <div class="group" style="margin-top:.6rem">
-        ${FX.map(f => `<button class="chip ${((ledOf(cur).fx) ?? 'solid') === f ? 'sel' : ''}" data-fx="${f}">${f}</button>`).join('')}
-      </div>
-      <p class="muted small">The colour belongs to the button, so it moves with the button if you bind it to another key.</p>`
-      : '<p class="muted small">Bind this key to give it a colour.</p>'}
-    </div>
-    ${cur ? robotColour(cur) : ''}`;
+        ${FX.map(f => `<button class="chip ${(entry.fx ?? 'solid') === f ? 'sel' : ''}" data-fx="${f}"
+                 ${entry.rgb ? '' : 'disabled title="pick a colour first"'}>${f}</button>`).join('')}
+      </div>`;
 }
 
+// A key's own colour (the map's led.tile), which is what an unbound key shows.
+const ownLed = (addr, idx) => state.map?.led?.tile?.[addr]?.[idx] ?? {};
+
 /**
- * Robot colour: rumble codes that recolour this key's button mid-match
- * (§8.8 rev 0.33). The same code that switches a legend can carry these, so
+ * Robot colour: rumble codes that recolour this key mid-match (§8.8 rev
+ * 0.33). The same code that switches a legend can carry these, so
  * `board.showLegend(n)` changes both in one call.
  *
- * Rows are per code and picking a colour replaces that code's entry for this
- * button, so the one-per-(code, btn) rule cannot be broken from here. "normal"
- * is the map's `map`: the code drops the robot's colour and the key goes back
- * to its default above.
+ * A bound key's codes name its button; an unbound key's name its LED by tile
+ * and index (rev 0.38). A bound key also lists any codes left on its LED from
+ * before it was bound, since they still apply. Rows are per code and picking
+ * a colour replaces that code's entry for this key, so the one-per-target
+ * rule cannot be broken from here. "normal" is the map's `map`: the code
+ * drops the robot's colour and the key goes back to its default above.
  */
-function robotColour(btn) {
-  const acts = ledActionsOf(state.map, { btn });
+function robotColour(t, btn) {
+  const tileActs = ledActionsOf(state.map, { addr: t.addr, led: sel.idx });
+  const acts = [...(btn ? ledActionsOf(state.map, { btn }) : []), ...tileActs];
   const full = ledActionsOf(state.map).length >= RUMBLE_LED_MAX;
   const codes = Array.from({ length: RUMBLE_CODE_MAX }, (_, i) => i + 1);
   const legendOf = (n) => bindFor(state.map, n);
@@ -657,8 +678,8 @@ function robotColour(btn) {
       ${acts.map(a => `<div class="disprow rumblerow bound">
         <span class="mono disprow-n">${a.code}</span>
         <span class="small" style="flex:1;min-width:0">${swatch(a.rgb)} ${a.rgb === 'map' ? 'back to the default'
-          : a.rgb === 'off' ? 'off' : `#${a.rgb}`}${a.fx ? ` · ${a.fx}` : ''}${legendOf(a.code) ? ' <span class="muted">+ legend</span>' : ''}</span>
-        <button data-rled-del="${a.code}" title="remove">×</button>
+          : a.rgb === 'off' ? 'off' : `#${a.rgb}`}${a.fx ? ` · ${a.fx}` : ''}${legendOf(a.code) ? ' <span class="muted">+ legend</span>' : ''}${btn && !('btn' in a) ? ' <span class="muted">(this key\'s LED)</span>' : ''}</span>
+        <button data-rled-del="${a.code}" ${'led' in a && !('btn' in a) ? 'data-rled-tile="1"' : ''} title="remove">×</button>
       </div>`).join('')}
       <div class="group" style="margin-top:.4rem">
         <label class="disprow-dbl">code
@@ -1126,7 +1147,7 @@ export function render(root) {
             ${Array.from({ length: t.keys }, (_, k) => {
               const bs = buttonsAt(t.addr, k);
               const b = bs[0];
-              const rgb = bs.map(x => ledOf(x).rgb).find(Boolean);
+              const rgb = bs.map(x => ledOf(x).rgb).find(Boolean) ?? ownLed(t.addr, k).rgb;
               return `<button class="keycell ${sel.kind === 'key' && k === sel.idx ? 'sel' : ''} ${b ? 'bound' : ''} ${t.pressed?.includes(k) ? 'down' : ''}"
                               data-key="${k}" style="border-radius:${g.shape === 'round' ? '999px' : '4px'}${g.cells ? `;grid-row:${g.cells[k][0]};grid-column:${g.cells[k][1]}` : ''}">
                 <span class="keycell-k">K${k + 1}</span>
@@ -1679,37 +1700,43 @@ export function render(root) {
       return render(root);
     }
 
+    // A bound key's colours belong to its button; an unbound key's to its
+    // LED, by tile and index (led.tile, and rev 0.38's tile LED actions).
+    const keyLed = { addr: t.addr, led: sel.idx };
+    const keyName = (btn) => btn ? btnLabel(btn) : `K${sel.idx + 1}`;
+
     if (el.dataset.rledRgb) {
-      const btn = bindingAt(t.addr, sel.idx); if (!btn) return;
+      const btn = bindingAt(t.addr, sel.idx);
       const rgb = el.dataset.rledRgb, code = rledCode;
-      await pushMap(m => { m.rumble = withLedAction(m.rumble, code, btn, rgb, rledFx); },
-        `Code ${code} → ${rgb === 'map' ? 'default colour' : rgb === 'off' ? 'LED off' : `#${rgb}`} on ${btnLabel(btn)} (unsaved)`);
+      await pushMap(m => { m.rumble = withLedAction(m.rumble, code, btn ?? keyLed, rgb, rledFx); },
+        `Code ${code} → ${rgb === 'map' ? 'default colour' : rgb === 'off' ? 'LED off' : `#${rgb}`} on ${keyName(btn)} (unsaved)`);
       return render(root);
     }
     if (el.dataset.rledDel) {
-      const btn = bindingAt(t.addr, sel.idx); if (!btn) return;
+      const btn = el.dataset.rledTile ? null : bindingAt(t.addr, sel.idx);
       const code = +el.dataset.rledDel;
-      await pushMap(m => { m.rumble = withoutLedAction(m.rumble, code, btn); },
-        `Code ${code} no longer recolours ${btnLabel(btn)} (unsaved)`);
+      await pushMap(m => { m.rumble = withoutLedAction(m.rumble, code, btn ?? keyLed); },
+        `Code ${code} no longer recolours ${keyName(btn)} (unsaved)`);
       return render(root);
     }
 
-    if (el.dataset.rgb) {
-      const btn = bindingAt(t.addr, sel.idx); if (!btn) return;
+    if (el.dataset.rgb || el.dataset.fx) {
+      const btn = bindingAt(t.addr, sel.idx);
+      const fx = el.dataset.fx;
       await pushMap(m => {
-        m.led = m.led ?? {}; m.led.btn = m.led.btn ?? {};
-        if (el.dataset.rgb === 'off') delete m.led.btn[btn];
-        else m.led.btn[btn] = { ...(m.led.btn[btn] ?? {}), rgb: el.dataset.rgb };
-      }, 'LED colour set (unsaved)');
-      return render(root);
-    }
-
-    if (el.dataset.fx) {
-      const btn = bindingAt(t.addr, sel.idx); if (!btn) return;
-      await pushMap(m => {
-        m.led = m.led ?? {}; m.led.btn = m.led.btn ?? {};
-        m.led.btn[btn] = { ...(m.led.btn[btn] ?? {}), fx: el.dataset.fx };
-      }, `LED effect ${el.dataset.fx} (unsaved)`);
+        m.led = m.led ?? {};
+        // the entry to edit: the button's, or the key's own under led.tile
+        let book, k;
+        if (btn) { book = m.led.btn = m.led.btn ?? {}; k = btn; }
+        else {
+          m.led.tile = m.led.tile ?? {};
+          book = m.led.tile[t.addr] = m.led.tile[t.addr] ?? {}; k = sel.idx;
+        }
+        if (fx) book[k] = { ...(book[k] ?? {}), fx };
+        else if (el.dataset.rgb === 'off') delete book[k];
+        else book[k] = { ...(book[k] ?? {}), rgb: el.dataset.rgb };
+        if (!btn && !Object.keys(book).length) delete m.led.tile[t.addr];
+      }, fx ? `LED effect ${fx} (unsaved)` : 'LED colour set (unsaved)');
       return render(root);
     }
 
