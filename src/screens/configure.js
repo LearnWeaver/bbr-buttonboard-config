@@ -638,7 +638,7 @@ function inspectKey(t) {
     <div>
       <div class="insp-title">LED</div>
       ${cur ? `
-      ${ledPicker(ledOf(cur))}
+      ${ledPicker(ledOf(cur), { flash: true })}
       <p class="muted small">The colour belongs to the button, so it moves with the button if you bind it to another key.</p>`
       : hasLed ? `
       ${ledPicker(own)}
@@ -652,18 +652,35 @@ function inspectKey(t) {
 // Colour swatches and effects for one LED's default. An effect needs a
 // colour to go with it (§9.5 refuses an led entry with no rgb), so the
 // effects wait until there is one.
-function ledPicker(entry) {
+function ledPicker(entry, { flash = false } = {}) {
+  const lit = entry.rgb && !isBlack(entry.rgb);
+  const on = flashOf(entry);
   return `
       <div class="swatches">
         ${swatchesOf('data-rgb', entry.rgb)}
-        ${pickerOf('data-rgb-pick', entry.rgb)}
-        <button class="ledsw off" data-rgb="off" title="off">∅</button>
+        ${pickerOf('data-rgb-pick', lit ? entry.rgb : null)}
+        <button class="ledsw off ${lit ? '' : 'sel'}" data-rgb="off" title="off">∅</button>
       </div>
       <div class="group" style="margin-top:.6rem">
-        ${FX.map(f => `<button class="chip ${(entry.fx ?? 'solid') === f ? 'sel' : ''}" data-fx="${f}"
-                 ${entry.rgb ? '' : 'disabled title="pick a colour first"'}>${f}</button>`).join('')}
-      </div>`;
+        ${FX.map(f => `<button class="chip ${lit && (entry.fx ?? 'solid') === f ? 'sel' : ''}" data-fx="${f}"
+                 ${lit ? '' : 'disabled title="pick a colour first"'}>${f}</button>`).join('')}
+      </div>
+      ${flash ? `<div class="group" style="margin-top:.6rem">
+        <button class="chip ${on ? 'sel' : ''}" data-press-fb="${on ? 'off' : 'on'}"
+                title="flash the feedback colour while the key is held">Flash when pressed</button>
+      </div>
+      <p class="muted small">${on ? (lit ? 'The key flashes white while it is held, over its colour.'
+                                        : 'The key stays dark and flashes white while it is held.')
+                                  : 'No flash while the key is held.'}</p>` : ''}`;
 }
+
+// An LED entry with this colour is dark: it exists only to carry the press
+// flash (§13.5's LED_FX_PRESS over a black base), the board-side form of
+// "no colour, but flash when pressed".
+const isBlack = (rgb) => /^0{6}$/.test(rgb ?? '');
+// Press feedback is on for a button with an entry whose press is not false;
+// a button with no entry has nothing to flash.
+const flashOf = (entry) => !!entry.rgb && entry.press !== false;
 
 // A key's own colour (the map's led.tile), which is what an unbound key shows.
 const ownLed = (addr, idx) => state.map?.led?.tile?.[addr]?.[idx] ?? {};
@@ -1166,7 +1183,7 @@ export function render(root) {
             ${Array.from({ length: t.keys }, (_, k) => {
               const bs = buttonsAt(t.addr, k);
               const b = bs[0];
-              const rgb = bs.map(x => ledOf(x).rgb).find(Boolean) ?? ownLed(t.addr, k).rgb;
+              const rgb = [...bs.map(x => ledOf(x).rgb), ownLed(t.addr, k).rgb].find(c => c && !isBlack(c));
               return `<button class="keycell ${sel.kind === 'key' && k === sel.idx ? 'sel' : ''} ${b ? 'bound' : ''} ${t.pressed?.includes(k) ? 'down' : ''}"
                               data-key="${k}" style="border-radius:${g.shape === 'round' ? '999px' : '4px'}${g.cells ? `;grid-row:${g.cells[k][0]};grid-column:${g.cells[k][1]}` : ''}">
                 <span class="keycell-k">K${k + 1}</span>
@@ -1363,7 +1380,7 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger]');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger]');
     if (!el) return;
 
     if (el.id === 'debounce-reset') {
@@ -1747,6 +1764,23 @@ export function render(root) {
       return render(root);
     }
 
+    if (el.dataset.pressFb) {
+      const btn = bindingAt(t.addr, sel.idx); if (!btn) return;
+      const on = el.dataset.pressFb === 'on';
+      await pushMap(m => {
+        m.led = m.led ?? {}; m.led.btn = m.led.btn ?? {};
+        const e = m.led.btn[btn];
+        if (on) {
+          if (!e) m.led.btn[btn] = { rgb: '000000' };             // dark, but flashes
+          else { const { press, ...rest } = e; m.led.btn[btn] = rest; }   // press defaults to true
+        } else if (e) {
+          if (isBlack(e.rgb)) delete m.led.btn[btn];               // nothing left to show
+          else m.led.btn[btn] = { ...e, press: false };
+        }
+      }, on ? `${btnLabel(btn)} flashes when pressed (unsaved)` : `${btnLabel(btn)} no longer flashes (unsaved)`);
+      return render(root);
+    }
+
     if (el.dataset.rgb || el.dataset.fx) {
       const btn = bindingAt(t.addr, sel.idx);
       const fx = el.dataset.fx;
@@ -1760,7 +1794,11 @@ export function render(root) {
           book = m.led.tile[t.addr] = m.led.tile[t.addr] ?? {}; k = sel.idx;
         }
         if (fx) book[k] = { ...(book[k] ?? {}), fx };
-        else if (el.dataset.rgb === 'off') delete book[k];
+        // off on a button that flashes keeps the flash: a black entry
+        else if (el.dataset.rgb === 'off') {
+          if (btn && book[k] && flashOf(book[k])) book[k] = { rgb: '000000' };
+          else delete book[k];
+        }
         else book[k] = { ...(book[k] ?? {}), rgb: el.dataset.rgb };
         if (!btn && !Object.keys(book).length) delete m.led.tile[t.addr];
       }, fx ? `LED effect ${fx} (unsaved)` : 'LED colour set (unsaved)');
