@@ -4,6 +4,7 @@ body { margin:0; font:15px/1.4 system-ui, sans-serif; color:var(--ink); backgrou
 main { flex:1 1 auto; min-height:0; overflow:auto; }
 header, footer { display:flex; align-items:center; justify-content:space-between; padding:.75rem 1.25rem; background:var(--surface); border-bottom:1px solid var(--rule); }
 footer { border-top:1px solid var(--rule); border-bottom:0; position:sticky; bottom:0; }
+.footer-actions { display:flex; gap:.5rem; margin-left:auto; }
 h1 { font-size:1.1rem; margin:0; }
 .status { color:var(--muted); font-variant-numeric:tabular-nums; }
 .status.ok { color:var(--ok); }

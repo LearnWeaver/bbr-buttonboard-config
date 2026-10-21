@@ -32,7 +32,12 @@
 
 <footer>
   <span id="dirty" hidden>Unsaved changes</span>
-  <button id="save" disabled>Save to board</button>
+  <span class="footer-actions">
+    <button id="map-export" disabled title="Download the board's map as a JSON file">Export map</button>
+    <button id="map-import" disabled title="Replace the board's map with one from a file">Import map</button>
+    <input id="map-import-file" type="file" accept=".json,application/json" hidden>
+    <button id="save" disabled>Save to board</button>
+  </span>
 </footer>
 
 <script type="module" src="src/app.js"></script>
