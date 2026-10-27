@@ -30,7 +30,7 @@ export async function connectBoard() {
   await refreshAll();
   setStatus(`Connected · ${state.hello.product} ${state.hello.fw} · ${state.hello.usb}`, 'ok');
   for (const b of document.querySelectorAll('#tabs button')) b.disabled = false;
-  for (const id of ['#save', '#map-export', '#map-import']) $(id).disabled = false;
+  for (const id of ['#save', '#rescan', '#map-export', '#map-import']) $(id).disabled = false;
   show('configure');
 }
 
@@ -67,6 +67,24 @@ $('#tabs').addEventListener('click', (e) => { const b = e.target.closest('button
 $('#save').addEventListener('click', async () => {
   try { await state.client.save(); await refreshMap(); setStatus('Saved', 'ok'); }
   catch (e) { setStatus(`Save failed: ${e.message}`, 'fault'); }
+});
+
+// Rescan (§9.2): the module resets the bus and finds every tile again, as at
+// power-up. The `tile` events refresh the list as tiles come back; the read
+// after the wait catches the end state even if one of them went missing.
+$('#rescan').addEventListener('click', async () => {
+  const b = $('#rescan');
+  b.disabled = true;
+  setStatus('Rescanning the bus…');
+  try {
+    await state.client.rescan();
+    await new Promise((r) => setTimeout(r, 1000));
+    await refreshTiles();
+    const n = state.tiles.filter((t) => t.state === 'online').length;
+    setStatus(`Rescanned · ${n} tile${n === 1 ? '' : 's'} online`, 'ok');
+  } catch (e) {
+    setStatus(e.message === 'unknown' ? 'Rescan needs newer main module firmware' : `Rescan failed: ${e.message}`, 'fault');
+  } finally { b.disabled = false; }
 });
 
 // Export reads the map fresh rather than trusting state.map, so the file is

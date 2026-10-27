@@ -110,6 +110,7 @@ export class ProtocolClient {
   hello()             { return this.send('hello'); }
   tiles()             { return this.send('tiles'); }
   stats()             { return this.send('stats'); }
+  rescan()            { return this.send('rescan'); }
   bind(btn, add=false){ return this.send(add ? `bind ${btn} add` : `bind ${btn}`, { timeoutMs: 35000 }); }
   // A combo, §9.7: the next key pressed feeds exactly these buttons.
   bindCombo(btns)     { return this.send(`bind ${btns.join('+')}`, { timeoutMs: 35000 }); }

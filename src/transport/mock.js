@@ -631,6 +631,15 @@ export class MockTransport {
         if (a.length !== 1 || !['on', 'off'].includes(a[0])) return err('args');
         this.pixel = a[0] === 'on';
         return ok({ pixel: this.pixel });
+      // §9.2: every tile drops to cached and the ones still there come back,
+      // with an event at each step as the module sends them.
+      case 'rescan': {
+        if (a.length) return err('args');
+        const back = this.tiles.filter(t => t.state !== 'cached' && t.state !== 'lost');
+        for (const t of this.tiles) if (t.state !== 'cached') { t.state = 'cached'; this._emit({ ev: 'tile', addr: t.addr, state: 'cached' }); }
+        setTimeout(() => { for (const t of back) { t.state = 'online'; this._emit({ ev: 'tile', addr: t.addr, state: 'online' }); } }, 150);
+        return ok();
+      }
       case 'reset': case 'boot': return ok();
       default: return err('unknown');
     }
