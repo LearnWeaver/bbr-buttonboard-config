@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tile Runner</title>
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="src/style.css">
+<style>
+  body { overflow:auto; height:auto; min-height:100vh; }
+  .game { padding:1.25rem; max-width:860px; margin:0 auto; width:100%; }
+  #field { display:block; width:100%; aspect-ratio:800/240; background:var(--surface); border:1px solid var(--rule); border-radius:6px; }
+  #prompt { font-size:1.1rem; font-weight:600; margin:1rem 0 .25rem; min-height:1.5em; }
+  #detail { color:var(--muted); margin:0 0 1rem; min-height:1.4em; }
+  .bar { display:flex; gap:1rem; flex-wrap:wrap; align-items:center; margin:.5rem 0; }
+  .held { display:flex; gap:.35rem; flex-wrap:wrap; min-height:1.8rem; }
+  .held .chip.down { background:var(--accent); border-color:var(--accent); color:#fff; }
+  #report table { max-width:520px; margin:.5rem 0; }
+  header a { color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>BBR Button Board · Tile Runner</h1>
+  <a href="./">Config app</a>
+</header>
+
+<div class="game">
+  <canvas id="field" width="800" height="240" aria-label="Tile Runner game"></canvas>
+  <p id="prompt">Press the key on the board you want for JUMP</p>
+  <p id="detail">No board? Space or ↑ jumps, ↓ ducks.</p>
+
+  <div class="bar">
+    <span id="pad" class="muted small">No controller seen yet</span>
+    <button id="rebind" hidden>Choose keys again</button>
+  </div>
+  <div class="small muted">Held now</div>
+  <div id="held" class="held"></div>
+
+  <div id="report" hidden>
+    <h2>Last run</h2>
+    <table id="report-table"></table>
+    <p class="small muted">A fast repeat is two presses of one key less than 60 ms apart. Nobody does that on
+      purpose, so any at all means a switch is bouncing past its debounce or a lead is dropping out. Raise that
+      tile's debounce in the config app, or check its cable.</p>
+  </div>
+
+  <h2>How it works</h2>
+  <p class="small">The game reads the board the way the Driver Station does, as a gamepad, so it works in both
+    USB modes. In <code>frc</code> mode, key numbers are the logical buttons the config app binds. In
+    <code>xinput</code> mode they are Xbox names. A board in <code>xinput</code> mode shows up in Chrome or
+    Edge on Windows. macOS has no driver for that kind of pad, so test <code>xinput</code> on the Driver
+    Station laptop. Any key bound to a button or to a stick direction can be jump or duck.</p>
+</div>
+
+<script type="module" src="src/game.js"></script>
+</body>
+</html>
