@@ -1,5 +1,5 @@
 // CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, no reflection, no final xor),
-// the one `shared/crc.h` and `tools/bb/crc.py` compute. `init` continues a
+// the one `shared/crc.h` and `tools/buttonboard/crc.py` compute. `init` continues a
 // running value instead of starting one, which is what a receiver CRCing a
 // stored picture as its chunks arrive needs (§14.9) -- the alternative is
 // keeping every byte to CRC at the end.

@@ -2,7 +2,7 @@
 //
 // The file is the bare map object of PROTOCOL.md §9.5, exactly what `map get`
 // returns and `map set` accepts, pretty-printed. No wrapper and no metadata,
-// so the same file goes back through `tools/bb` or a terminal `map set`
+// so the same file goes back through `tools/buttonboard` or a terminal `map set`
 // unchanged. Import also takes a whole `map get` reply ({"ok":true,"map":…}),
 // because that is what someone copying from PuTTY ends up with.
 //

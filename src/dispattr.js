@@ -1,6 +1,6 @@
 // Display attributes and the §14.7 palette.
 //
-// The same encoding as `tools/bb/display.py`, and deliberately so: two
+// The same encoding as `tools/buttonboard/display.py`, and deliberately so: two
 // clients that disagree about what ATTR 13 means is a bug nobody would find
 // until a panel drew the wrong thing. Keep them in step.
 //
@@ -312,7 +312,7 @@ export function slotChunks(bytes, max = SLOT_CHUNK) {
 
 /**
  * The CRC `disp … slot … end` commits against: CRC-16/CCITT-FALSE over every
- * data byte, the same function `shared/crc.h` and `tools/bb/crc.py` compute.
+ * data byte, the same function `shared/crc.h` and `tools/buttonboard/crc.py` compute.
  *
  * Deliberately not a second implementation. Two clients that disagree about a
  * polynomial fail every commit with `err crc` and give nothing to debug with,
