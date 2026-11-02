@@ -22,7 +22,11 @@ async function loadManifest() {
 
 function candidate(tile) {
   const proto = state.hello?.proto ?? 1;
-  const imgs = (manifest?.images ?? []).filter(i => i.type === tile.type && i.proto === proto);
+  // An RGB tile reports its plain sibling's type (mx3rgb is `mx3` with
+  // CAP_LEDS), so the LED count has to match too: the wrong one either drops
+  // a tile's LEDs or drives a pin a plain board never wired.
+  const imgs = (manifest?.images ?? []).filter(i => i.type === tile.type && i.proto === proto
+    && (i.leds ?? 0) === (tile.leds ?? 0));
   if (!imgs.length) return null;
   imgs.sort((a, b) => semverCmp(b.fw, a.fw));
   const best = imgs[0];
