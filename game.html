@@ -30,7 +30,7 @@
 <div class="game">
   <canvas id="field" width="800" height="240" aria-label="Tile Runner game"></canvas>
   <p id="prompt">Press the key on the board you want for JUMP</p>
-  <p id="detail">No board? Space or ↑ jumps, ↓ ducks.</p>
+  <p id="detail">Nothing happens? The key needs a button binding: see <a href="#keys">Setting up the keys</a>. No board? Space or ↑ jumps, ↓ ducks.</p>
 
   <div class="bar">
     <span id="pad" class="muted small">No controller seen yet</span>
@@ -38,6 +38,24 @@
   </div>
   <div class="small muted">Held now</div>
   <div id="held" class="held"></div>
+
+  <h2 id="keys">Setting up the keys</h2>
+  <p class="small">The game only sees a key that is <strong>bound to a button</strong>. A key with no binding sends
+    nothing to the computer, so pressing it here does nothing. Bind two keys first:</p>
+  <ol class="small">
+    <li>In the <a href="./">config app</a>, open <strong>Configure</strong> and click the key you want for JUMP.
+      Under <strong>Reports as</strong>, pick a number, for example <strong>1</strong>.</li>
+    <li>Click a second key for DUCK and pick a <em>different</em> number, for example <strong>2</strong>. Two
+      keys on the same number look like one key to the game.</li>
+    <li>Come back here and press each key when asked.</li>
+  </ol>
+  <p class="small">A binding works as soon as you pick it. Press <strong>Save to board</strong> in the config app if you
+    want it to stay after the board is unplugged. Keys already bound for your robot work too, as long as JUMP and
+    DUCK are on different numbers.</p>
+  <p class="small">In <code>xinput</code> mode only numbers 1 to 24 reach the game: 25 to 32 have no Xbox
+    equivalent. In <code>frc</code> mode, and in config mode (CFG held at plug-in), any of 1 to 32 works. The
+    config app can stay open in another tab while you play. If <em>No controller seen yet</em> stays up, press a
+    bound key once: a browser only shows a gamepad after one of its buttons has been pressed.</p>
 
   <div id="report" hidden>
     <h2>Last run</h2>
