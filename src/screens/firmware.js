@@ -34,6 +34,15 @@ function candidate(tile) {
   return { img: best, newer, offer: newer || allowSame };
 }
 
+// The main module's release, from the same manifest (IMPLEMENTATION.md §79).
+// Not flashed from here -- a browser cannot write to the RPI-RP2 drive -- so
+// this is only "is there a newer one, and here is the file".
+export function mainCandidate(hello, man) {
+  const m = man?.main;
+  if (!m || !hello?.fw) return null;
+  return { img: m, newer: semverCmp(m.fw, hello.fw) > 0 };
+}
+
 const logLines = () => (state.client?.log ?? []).slice(-40).join('\n');
 
 export async function render(root) {
@@ -66,6 +75,9 @@ export async function render(root) {
     </div>`;
   }).join('');
 
+  const mc = mainCandidate(state.hello, manifest);
+  const build = state.hello?.build ? ` · build ${state.hello.build}` : '';
+
   root.innerHTML = `
   <div class="fw">
     <section class="fw-tiles">
@@ -81,11 +93,16 @@ export async function render(root) {
       <h2>Main module</h2>
       <p class="muted">Reboots into its bootloader and appears as the RPI-RP2 drive. Drag the new
         <code>.uf2</code> onto it.</p>
-      <div class="fwcard">
+      <div class="fwcard ${mc?.newer ? 'stale' : ''}">
         <div class="fwcard-top">
-          <div class="mono">${state.hello?.fw ?? '—'}</div>
+          <div>
+            <div class="mono">${state.hello?.fw ?? '—'}</div>
+            <div class="mono muted small">running ${state.hello?.fw ?? '—'}${build} · latest ${mc ? mc.img.fw : '—'}</div>
+          </div>
           <button class="fwbtn" id="boot">Reboot for UF2 update</button>
         </div>
+        ${mc ? `<p class="small">${mc.newer ? 'An update is available.' : 'Up to date.'}
+          <a href="firmware/${mc.img.file}" download>Download ${mc.img.file}</a></p>` : ''}
       </div>
       <p class="notice small"><strong>The COM port disappears.</strong>
         This page loses the board until the update is copied across and it restarts.</p>
