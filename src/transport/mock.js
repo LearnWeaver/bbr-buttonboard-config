@@ -426,6 +426,18 @@ export class MockTransport {
           // map.c: debounce keys are tile addresses 1..31, values 1..255 ms.
           for (const [addr, ms] of Object.entries(m.debounce ?? {}))
             if (!(+addr >= 1 && +addr <= 31) || !Number.isInteger(ms) || ms < 1 || ms > 255) return err('debounce');
+          // map.c: disp keys are tile addresses, each an object whose press
+          // is "invert" or "off"; "off" is no entry in the canonical form.
+          if (m.disp !== undefined) {
+            if (typeof m.disp !== 'object' || Array.isArray(m.disp)) return err('disp');
+            const disp = {};
+            for (const [addr, e] of Object.entries(m.disp)) {
+              if (!(+addr >= 1 && +addr <= 31) || typeof e !== 'object' || e === null || Array.isArray(e)) return err('disp');
+              if (e.press !== undefined && e.press !== 'invert' && e.press !== 'off') return err('disp');
+              if (e.press === 'invert') disp[addr] = { press: 'invert' };
+            }
+            if (Object.keys(disp).length) m.disp = disp; else delete m.disp;
+          }
           // map.c's canonical emit: legends, then messages, then LED
           // actions, each in the order given; hex upper case, 000000 as
           // `off`, `fx` only when it is not solid and never on `map`, and a

@@ -272,6 +272,7 @@ async function pushMap(mutate, msg) {
   if (!m.enc.length) delete m.enc;
   if (!(m.rumble ?? []).length) delete m.rumble;
   if (m.debounce && !Object.keys(m.debounce).length) delete m.debounce;
+  if (m.disp && !Object.keys(m.disp).length) delete m.disp;
   try {
     await state.client.mapSet(m);
     await refreshMap();
@@ -1044,6 +1045,26 @@ function inspectDisp(t) {
       <div class="insp-title">Contrast</div>
       <input type="range" id="disp-contrast" min="0" max="255" value="${draftFor(t).contrast ?? 143}" style="width:100%">
       <p class="muted small">On a backlit panel this sets the backlight, so 0 is dark. It applies straight away.</p>
+    </div>
+    ${t.keys ? pressInvertView(t) : ''}`;
+}
+
+// The screen's answer to "Flash when pressed" (§4.5 CFG_PRESS_INVERT): the
+// tile inverts its panel while its key is held, so a screen-key shows it was
+// pressed the way a lit key flashes white. Kept in the map's `disp` section.
+const pressInvertOf = (addr) => state.map?.disp?.[addr]?.press === 'invert';
+
+function pressInvertView(t) {
+  const on = pressInvertOf(t.addr);
+  return `
+    <div>
+      <div class="insp-title">Press feedback</div>
+      <div class="group">
+        <button class="chip ${on ? 'sel' : ''}" data-disp-press="${on ? 'off' : 'on'}"
+                title="invert the screen while the key is held">Flash when pressed</button>
+      </div>
+      <p class="muted small">${on ? 'The screen flips to a negative image while the key is held.'
+                                  : 'The screen does not change while the key is held.'}</p>
     </div>`;
 }
 
@@ -1380,7 +1401,7 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger]');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger]');
     if (!el) return;
 
     if (el.id === 'debounce-reset') {
@@ -1761,6 +1782,18 @@ export function render(root) {
       const code = +el.dataset.rledDel;
       await pushMap(m => { m.rumble = withoutLedAction(m.rumble, code, btn ?? keyLed); },
         `Code ${code} no longer recolours ${keyName(btn)} (unsaved)`);
+      return render(root);
+    }
+
+    if (el.dataset.dispPress) {
+      const on = el.dataset.dispPress === 'on';
+      await pushMap(m => {
+        m.disp = { ...(m.disp ?? {}) };
+        const { press, ...rest } = m.disp[t.addr] ?? {};
+        if (on) m.disp[t.addr] = { ...rest, press: 'invert' };
+        else if (Object.keys(rest).length) m.disp[t.addr] = rest;
+        else delete m.disp[t.addr];
+      }, on ? `Tile ${t.addr}'s screen inverts when pressed (unsaved)` : `Tile ${t.addr}'s screen no longer inverts (unsaved)`);
       return render(root);
     }
 
