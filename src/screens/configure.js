@@ -396,11 +396,17 @@ function inspectMessages(t) {
 // specific to any control — every onchange path ends in a rebuild.
 //
 // The fix is here rather than in each handler, so nobody has to remember it.
-// What is NOT preserved is a genuine change of context: selecting another
-// tile, key, knob or panel starts at the top, because restoring an offset
-// from a different view is its own bug. `renderedSel` is what tells the two
-// apart — the handlers mutate `sel` before they re-render, so a mismatch at
-// render time means the view changed.
+// How much survives depends on how far the selection moved. The chain rail
+// always keeps its place: it lists the same tiles whatever is selected.
+// Another key or knob of the same kind on the same tile keeps the canvas and
+// the inspector too, because the inspector has the same layout and someone
+// stepping through keys to bind them wants the control they were using to
+// stay put. Another tile, or a switch between key, knob and panel, starts the
+// canvas and inspector at the top, because an offset from a different layout
+// lands somewhere arbitrary. Focus comes back only for the very same
+// selection. `renderedSel` is what tells these apart — the handlers mutate
+// `sel` before they re-render, so a mismatch at render time means the view
+// changed.
 //
 // It is a safety net, not a licence: a change that affects one region should
 // still patch that region, the way the live rumble line does.
@@ -448,13 +454,13 @@ function snapshotView(root) {
 
 function restoreView(root, snap) {
   if (!snap?.sel) return;
-  // A different tile, key, knob or panel is a new view: start at the top.
-  if (snap.sel.addr !== sel.addr || snap.sel.kind !== sel.kind || snap.sel.idx !== sel.idx) return;
+  const sameLayout = snap.sel.addr === sel.addr && snap.sel.kind === sel.kind;
   for (const [s, top] of Object.entries(snap.scroll)) {
+    if (s !== '.cfg-rail' && !sameLayout) continue;
     const el = root.querySelector(s);
     if (el) el.scrollTop = top;
   }
-  if (!snap.focus) return;
+  if (!sameLayout || snap.sel.idx !== sel.idx || !snap.focus) return;
   const el = root.querySelector(snap.focus.key);
   if (!el) return;
   el.focus({ preventScroll: true });          // preventScroll: the offsets above are the authority
