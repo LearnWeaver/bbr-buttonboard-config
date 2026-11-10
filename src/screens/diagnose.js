@@ -89,7 +89,13 @@ export async function render(root) {
         <span class="mono muted">${mode === 'off' ? 'test off' : mode === 'hold' ? `test hold ${held}` : `test ${mode}`}</span>
       </div>
       <p class="muted">The board presses buttons by itself here, ignoring the tiles and your bindings, so you can
-        check the Driver Station with no tiles plugged in.</p>
+        check the Driver Station with no tiles plugged in. Walk 1 → 32 to see which logical button number
+        arrives where, and to prove your robot code reads the number you think it does.</p>
+      <p class="notice small"><strong>FRC only, on the Driver Station laptop itself.</strong>
+        Leave the Driver Station and this page open together: the board is one USB device with two separate
+        interfaces — the gamepad the Driver Station reads, and the config port this page opens — so
+        neither one blocks the other. An FTC board cannot do this. <code>xinput</code> has no config port, and
+        the <code>config</code> personality its CFG button gives is not a gamepad the Driver Hub will bind.</p>
       <p class="benchbar">
         <button class="primary" data-mode="walk">Walk 1 → 32</button>
         <label>step <input type="number" id="ms" min="50" max="5000" step="50" value="250"> ms</label>
