@@ -18,14 +18,11 @@ const isMock = new URL(location.href).searchParams.get('mock') === '1';
 
 const ICON_OK = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2"
   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
-const ICON_TERM = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2"
-  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 17 6-6-6-6"/><path d="M12 19h8"/></svg>`;
 
 function disconnected() {
   return `
     <h2 class="hero">Plug in the main module</h2>
-    <p class="hero-sub">Then choose its port. The browser only opens a serial port from a click, so this
-      button is the one thing that cannot be skipped.</p>
+    <p class="hero-sub">Then choose its port.</p>
 
     <p class="hero-actions">
       <button class="primary big" id="connect">Choose port and connect</button>
@@ -39,13 +36,9 @@ function disconnected() {
         <div class="fact">${ICON_OK}<span>Chrome, Edge and Opera on desktop. Firefox and Safari have no Web
           Serial and cannot talk to the board.</span></div>
       </div>
-      <div>
-        <div class="insp-title">In the pit, without this page</div>
-        <div class="fact">${ICON_TERM}<span>Open the COM port in any terminal and type <code>tiles</code>.</span></div>
-      </div>
     </div>
 
-    <p class="notice"><strong>A board set to <code>xinput</code> has no config port.</strong><br>
+    <p class="notice"><strong>A board set to <code>xinput</code> will not show up in the connection list.</strong><br>
       Hold its CFG button while plugging it in, and it will appear here.</p>`;
 }
 
