@@ -25,6 +25,8 @@ const TYPES = {
   disp1:      { cols: 1, shape: 'square', name: 'Display' },
   screenkey1: { cols: 1, shape: 'square', name: 'Screen key' },
   disp2:      { cols: 1, shape: 'square', name: 'Colour display' },
+  // §17: the one key is the stick's own push; the stick is drawn below it.
+  stick1:     { cols: 1, shape: 'round',  name: 'Thumbstick' },
 };
 
 const CAP_DISP_COLOR = 1 << 6;      // shared/protocol.h; §9.5 gives it no field
@@ -68,4 +70,11 @@ export function displayNote(tile) {
 // than drawing something that implies you can bind a detent here.
 export function encoderNote(tile) {
   return tile.enc ? `${tile.enc} rotary encoder${tile.enc === 1 ? '' : 's'} — click a knob to bind it` : '';
+}
+
+// A stick is not a key either (§17): K1 is its push, and the deflection is two
+// axes the module calibrates and maps. `axes` comes in pairs, one per stick.
+export function stickNote(tile) {
+  const n = Math.floor((tile.axes ?? 0) / 2);
+  return n ? `${n === 1 ? 'An analog stick' : `${n} analog sticks`} — click it to bind and calibrate it; K1 is its push` : '';
 }

@@ -121,6 +121,16 @@ export class ProtocolClient {
   bindAxis(n)         { return this.send(`bind axis ${n}`, { timeoutMs: 35000 }); }
   unbindAxis(n)       { return this.send(`unbind axis ${n}`); }
   encZero(n)          { return this.send(n == null ? 'enc zero' : `enc zero ${n}`); }
+  // Sticks, §17.6. `bind stick` waits for a deflection past half travel, so
+  // it gets bind mode's long timeout too.
+  bindStickSide(side) { return this.send(`bind stick ${side}`, { timeoutMs: 35000 }); }
+  bindStickAxes(x, y) { return this.send(`bind stick ${x} ${y}`, { timeoutMs: 35000 }); }
+  unbindStick(addr, idx = 0) { return this.send(`unbind stick ${addr} ${idx}`); }
+  // The rest reading is taken when `stickCal` lands, so the stick must be let
+  // go first; `done` checks the travel since and writes `cal` into the map.
+  stickCal(addr, idx = 0) { return this.send(`stick cal ${addr} ${idx}`); }
+  stickCalDone()      { return this.send('stick cal done'); }
+  stickCalCancel()    { return this.send('stick cal cancel'); }
   mapGet()            { return this.send('map get'); }
   mapSet(map)         { return this.send(`map set ${JSON.stringify(map)}`); }
   save()              { return this.send('save', { timeoutMs: 10000 }); }

@@ -7,6 +7,60 @@ import { crc16Running } from '../util.js';
 import { defaultDebounce } from '../tilegeom.js';
 import { decodeXinputOut, rumblePacket, playerPacket, sdkByte, validateBinds,
          bindsOf, textsOf, isLedEntry, isTextEntry, applyLedActions, liveTileKey, mapFits } from '../rumble.js';
+import { stickAt, stickOutput, withStickAxes, withStickSide, withoutStickOutputs,
+         STICK_CAL_MIN_TRAVEL, STICK_DEADZONE_MAX } from '../stick.js';
+
+// How often the fake stick moves, and how far a push goes from rest. 28000
+// raw is most of a real RKJXV's travel either way of a 32768 centre, and well
+// past STICK_CAL_MIN_TRAVEL, so a calibration run here can pass.
+const STICK_STEP_MS = 50;
+const STICK_REACH = 28000;
+
+/**
+ * map_validate()'s `stick` and `dup_axis` rules (firmware/core/map.c), so a
+ * map this page builds is refused here when the board would refuse it.
+ * Returns the error name or null.
+ */
+function stickMapError(m) {
+  const sticks = m.stick ?? [];
+  if (!Array.isArray(sticks) || sticks.length > 8) return 'stick';             // MAP_STICK_MAX
+  const uint = (v, max) => Number.isInteger(v) && v >= 0 && v <= max;
+  const enc = (m.enc ?? []).filter(e => e.axis);
+  for (let i = 0; i < enc.length; i++)
+    if (enc.slice(0, i).some(o => o.axis === enc[i].axis)) return 'dup_axis';
+  for (let i = 0; i < sticks.length; i++) {
+    const s = sticks[i];
+    if (typeof s !== 'object' || s === null || Array.isArray(s)) return 'stick';
+    const idx = s.idx ?? 0, x = s.x ?? 0, y = s.y ?? 0;
+    if (!uint(s.addr, 31) || s.addr < 1 || !uint(idx, 1) || !uint(x, 4) || !uint(y, 4)) return 'stick';
+    if (!x !== !y || (x && x === y)) return 'stick';
+    if (s.xinput !== undefined && s.xinput !== 'left' && s.xinput !== 'right') return 'stick';
+    for (const f of ['invertX', 'invertY']) if (s[f] !== undefined && typeof s[f] !== 'boolean') return 'stick';
+    if (s.deadzone !== undefined && !uint(s.deadzone, STICK_DEADZONE_MAX)) return 'stick';
+    if (s.cal !== undefined) {
+      if (!Array.isArray(s.cal) || s.cal.length !== 6 || !s.cal.every(v => uint(v, 65535))) return 'stick';
+      for (let a = 0; a < 2; a++) if (!(s.cal[3 * a] < s.cal[3 * a + 1] && s.cal[3 * a + 1] < s.cal[3 * a + 2])) return 'stick';
+    }
+    for (const o of sticks.slice(0, i)) {
+      if (o.addr === s.addr && (o.idx ?? 0) === idx) return 'stick';
+      if (s.xinput && o.xinput === s.xinput) return 'stick';
+      if (x && [o.x, o.y].some(v => v === x || v === y)) return 'dup_axis';
+    }
+    if (x && enc.some(e => e.axis === x || e.axis === y)) return 'dup_axis';
+  }
+  return null;
+}
+
+// map.c's emit order for one stick entry: absent x/y, xinput and deadzone are
+// left out, the inverts are always there.
+const canonicalStick = (s) => ({
+  addr: s.addr, idx: s.idx ?? 0,
+  ...(s.x ? { x: s.x, y: s.y } : {}),
+  ...(s.xinput ? { xinput: s.xinput } : {}),
+  invertX: !!s.invertX, invertY: !!s.invertY,
+  ...(s.deadzone !== undefined ? { deadzone: s.deadzone } : {}),
+  ...(s.cal ? { cal: [...s.cal] } : {}),
+});
 
 const AUX_QUEUE_DEPTH = 8;
 // RUMBLE_ACT_MIN_US from firmware/core/lineproto.h, in the milliseconds a
@@ -57,6 +111,10 @@ export class MockTransport {
       // The 1.8" colour display (board_disp2.h): no keys, 160 x 128 landscape,
       // 13 x 8 cells of the 12x16 font, a picture store like screenkey1's.
       { addr: 9, type: 'disp2', uid: 'D2C0A9', uidFull: 'D2C0A900112233445566'.slice(0,20), fw: '0.1.0', proto: 1, keys: 0, leds: 0, caps: 83, cols: 13, rows: 8, pxW: 160, pxH: 128, slots: 32, state: 'online', crcErr: 0, missed: 0, lastSeen: 2, pressed: [], debounce: 5 },
+      // One thumbstick (§17): CAP_BOOTLOADER | CAP_DEBOUNCE | CAP_ANALOG = 131,
+      // what the first real stick1 reported. It rests off centre, as that one
+      // did, so an uncalibrated stick visibly reads a small deflection.
+      { addr: 10, type: 'stick1', uid: '5735FF', uidFull: '313756393832D65735FF'.slice(0,20), fw: '0.2.0', proto: 1, keys: 1, leds: 0, caps: 131, axes: 2, axisRaw: [31374, 31625], stick: [[0, 0]], state: 'online', crcErr: 0, missed: 0, lastSeen: 2, pressed: [], debounce: 5 },
     ];
     this.map = { v: 1, name: 'mock layout', bind: [
       { btn: 1, addr: 1, key: 0 }, { btn: 1, addr: 1, key: 1 }, { btn: 1, addr: 1, key: 3 }, { btn: 1, addr: 1, key: 4 },   // 2x2 group
@@ -102,7 +160,79 @@ export class MockTransport {
     // that reads it back, so only tests look at it -- but a rumble LED action
     // is only checkable against a layer it can land in.
     this.ledLive = new Map();      // btn, or `tile:<addr>:<led>` -> {rgb, fx}
+    // The stick (§17): where it rests, a push in progress, and the module's
+    // own `stick cal` state, which widens from every reading as lineproto.c's
+    // does — not from the 250 ms `tiles` poll a page sees.
+    this.stickRest = [31374, 31625];
+    this.stickPush = null;         // {angle, until}
+    this.stickCal = null;          // {addr, idx, v:[lo,mid,hi, lo,mid,hi]}
+    this.stickT = 0;
     setInterval(() => this._tick(), 400);
+    setInterval(() => this._stickStep(), STICK_STEP_MS);
+  }
+
+  /**
+   * Move the fake stick and recompute what the module would report: the raw
+   * readings, then §17.3's output through the map's entry. Idle it sits at
+   * rest with a little noise; now and then it is pushed somewhere; while a
+   * calibration runs it is swept round the whole edge, which is what the page
+   * asks a person to do.
+   */
+  _stickStep() {
+    const t = this.tiles.find(x => x.axes);
+    if (!t || t.state !== 'online') return;
+    const now = performance.now();
+    this.stickT += STICK_STEP_MS;
+    let angle = null;
+    if (this.stickCal) angle = this.stickT / 400;
+    else if (this.stickPush && now < this.stickPush.until) angle = this.stickPush.angle;
+    else if (Math.random() < 0.01) this.stickPush = { angle: Math.random() * 2 * Math.PI, until: now + 600 };
+    const clamp = (v) => Math.max(0, Math.min(65535, Math.round(v)));
+    const noise = () => (Math.random() - 0.5) * 300;
+    t.axisRaw = angle === null
+      ? [clamp(this.stickRest[0] + noise()), clamp(this.stickRest[1] + noise())]
+      : [clamp(this.stickRest[0] + STICK_REACH * Math.cos(angle)), clamp(this.stickRest[1] + STICK_REACH * Math.sin(angle))];
+    const c = this.stickCal;
+    if (c && c.addr === t.addr) for (let a = 0; a < 2; a++) {
+      c.v[3 * a] = Math.min(c.v[3 * a], t.axisRaw[a]);
+      c.v[3 * a + 2] = Math.max(c.v[3 * a + 2], t.axisRaw[a]);
+    }
+    // §17.3: centred in bind mode and while this stick is being calibrated.
+    const held = this.bindPending || (c && c.addr === t.addr);
+    t.stick = [held ? [0, 0] : stickOutput(t.axisRaw, stickAt(this.map, t.addr, 0), this.usb)];
+  }
+
+  // `stick cal …` (§17.6), as lineproto.c's cmd_stick answers it.
+  _stickCal(a, ok, err) {
+    if (a[0] !== 'cal' || a.length < 2) return err('args');
+    if (a[1] === 'cancel' && a.length === 2) { this.stickCal = null; return ok(); }
+    if (a[1] === 'done' && a.length === 2) {
+      const c = this.stickCal;
+      if (!c) return err('args');
+      this.stickCal = null;
+      const t = this.tiles.find(x => x.addr === c.addr);
+      if (!t || t.state !== 'online') return err('lost');
+      for (let ax = 0; ax < 2; ax++) {
+        const [lo, mid, hi] = c.v.slice(3 * ax, 3 * ax + 3);
+        if (mid - lo < STICK_CAL_MIN_TRAVEL || hi - mid < STICK_CAL_MIN_TRAVEL) return err('range', { axis: ax ? 'y' : 'x' });
+      }
+      this.map.stick = this.map.stick ?? [];
+      let s = stickAt(this.map, c.addr, c.idx);
+      if (!s) { s = { addr: c.addr, idx: c.idx, invertX: false, invertY: false }; this.map.stick.push(s); }
+      s.cal = [...c.v];
+      return ok({ addr: c.addr, idx: c.idx, cal: s.cal });
+    }
+    const addr = +a[1], idx = a.length > 2 ? +a[2] : 0;
+    if (a.length > 3 || !(addr >= 1 && addr <= 31) || !(idx === 0 || idx === 1)) return err('args');
+    const t = this.tiles.find(x => x.addr === addr);
+    if (!t || 2 * idx + 1 >= (t.axes ?? 0)) return err('args');               // no such stick
+    if (t.state !== 'online') return err('lost');
+    // The page tells the person to let go first; the fake person does.
+    this.stickPush = null;
+    t.axisRaw = [...this.stickRest];
+    const r = t.axisRaw.slice(2 * idx, 2 * idx + 2);
+    this.stickCal = { addr, idx, v: [r[0], r[0], r[0], r[1], r[1], r[1]] };
+    return ok({ cal: 'started' });
   }
   onLine(cb) { this.lineCb = cb; }
   async open() {}
@@ -421,6 +551,10 @@ export class MockTransport {
           // map.c: a trigger is lt or rt, and each has at most one encoder (§15.6 rev 0.37)
           const trig = (m.enc ?? []).map(e => e.trigger).filter(x => x !== undefined);
           if (trig.some(x => x !== 'lt' && x !== 'rt') || new Set(trig).size !== trig.length) return err('enc');
+          // map.c: sticks (§17.6), and frc axes unique across encoders and sticks
+          const stickErr = stickMapError(m);
+          if (stickErr) return err(stickErr);
+          if (m.stick?.length) m.stick = m.stick.map(canonicalStick); else delete m.stick;
           const bad = validateBinds(m.rumble);
           if (bad) return err(bad);
           // map.c: debounce keys are tile addresses 1..31, values 1..255 ms.
@@ -470,8 +604,29 @@ export class MockTransport {
         if (e && e.addr === t.addr) t.encPos[e.idx] = 0;
         return ok();
       }
+      case 'stick': return this._stickCal(a, ok, err);
       case 'bind': {
         if (a[0] === 'cancel') { this.bindPending = null; return ok(); }
+        if (a[0] === 'stick') {                             // §17.6: waits for a deflection
+          const side = a.length === 2 && (a[1] === 'left' || a[1] === 'right') ? a[1] : null;
+          const x = +a[1], y = +a[2];
+          const axes = a.length === 3 && [x, y].every(v => Number.isInteger(v) && v >= 1 && v <= 4) && x !== y;
+          if (!side && !axes) return err('args');
+          this._emit({ ev: 'fault', on: true, why: 'bind' });
+          this.bindPending = setTimeout(() => {
+            const t = this.tiles.find(v => v.axes && v.state === 'online');
+            this.bindPending = null;
+            if (!t) return;                                 // the board would time out; the client does
+            // The person "pushes" it, past half deflection: that is the event.
+            this.stickPush = { angle: Math.PI / 2, until: performance.now() + 600 };
+            this._emit({ ev: 'stick', addr: t.addr, idx: 0 });
+            this.map = side ? withStickSide(this.map, t.addr, 0, side).map : withStickAxes(this.map, t.addr, 0, x, y).map;
+            if (this.map.stick) this.map.stick = this.map.stick.map(canonicalStick);
+            this._emit({ ev: 'fault', on: false, why: 'none' });
+            ok({ addr: t.addr, idx: 0, ...(side ? { xinput: side } : { x, y }) });
+          }, 1000);
+          return;
+        }
         if (a[0] === 'axis') {                              // §15.7
           const axis = +a[1];
           if (!(axis >= 1 && axis <= 4)) return err('args');
@@ -523,6 +678,12 @@ export class MockTransport {
         return;
       }
       case 'unbind': {
+        if (a[0] === 'stick') {                             // map_unbind_stick: calibration kept
+          const addr = +a[1], idx = a.length > 2 ? +a[2] : 0;
+          if (a.length < 2 || a.length > 3 || !(addr >= 1 && addr <= 31) || !(idx === 0 || idx === 1)) return err('args');
+          this.map = withoutStickOutputs(this.map, addr, idx);
+          return ok();
+        }
         if (a[0] === 'axis') {
           // map_unbind_axis: an entry that still has buttons or a trigger stays
           this.map.enc = (this.map.enc ?? []).map(x => x.axis === +a[1] ? { ...x, axis: undefined } : x)

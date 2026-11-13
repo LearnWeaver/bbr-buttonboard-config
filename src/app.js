@@ -52,6 +52,9 @@ export async function refreshAll() { await refreshTiles(); await refreshMap(); }
 export function setStatus(text, cls = '') { const el = $('#status'); el.textContent = text; el.className = `status ${cls}`; }
 
 export function show(name) {
+  // A screen may hold something open on the board that must not outlive it:
+  // Configure's stick calibration, during which that stick reads centred.
+  if (name !== state.screen) screens[state.screen].leave?.();
   state.screen = name;
   for (const b of document.querySelectorAll('#tabs button')) b.classList.toggle('active', b.dataset.screen === name);
   render();

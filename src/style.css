@@ -166,6 +166,24 @@ button.big:not(.primary):hover { border-color:var(--accent); color:var(--accent)
 .dirpick { display:flex; align-items:center; justify-content:space-between; gap:.5rem; margin-top:.4rem; }
 .dirpick select { max-width:11rem; }
 
+/* ---- Configure: sticks (§17) ---- */
+/* Travel circle, crosshair, the raw reading as a ring and the output as a dot. */
+.stickknob { width:108px; }
+.stickview { display:block; overflow:visible; }
+.stick-edge { fill:none; stroke:currentColor; stroke-width:.04; opacity:.5; }
+.stick-cross { stroke:currentColor; stroke-width:.02; opacity:.3; }
+.stick-raw { fill:none; stroke:var(--muted); stroke-width:.04; }
+.stick-out { fill:var(--accent); }
+.knob.sel .stick-out { fill:#fff; }
+.knob.sel .stick-raw { stroke:#fff; opacity:.7; }
+.stickinsp { display:flex; gap:1rem; align-items:center; margin-top:.5rem; }
+.stickinsp .mono { margin-bottom:.4rem; }
+.calbar { display:flex; align-items:center; gap:.5rem; margin:.25rem 0; }
+.calbar > span:first-child { width:4.5rem; }
+.calbar-track { flex:1; height:.5rem; border:1px solid var(--rule); border-radius:999px; overflow:hidden; background:var(--surface); }
+.calbar-fill { display:block; height:100%; width:0; background:var(--muted); transition:width .2s; }
+.calbar-fill.full { background:var(--ok); }
+
 /* ---- Configure: display panels (§14) ---- */
 /* The preview is drawn dark whatever the page theme is: it is a picture of a
    panel, not part of the page, and a "black" background that is not black

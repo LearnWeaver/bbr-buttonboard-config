@@ -10,7 +10,10 @@
 //     (§9.6, §15.7) for when you cannot tell which control on the diagram is
 //     the one under your hand.
 import { state, refreshMap, refreshTiles, setStatus, render as rerender } from '../app.js';
-import { geom, encoderNote, displayNote, defaultDebounce, hasDebounce } from '../tilegeom.js';
+import { geom, encoderNote, displayNote, stickNote, defaultDebounce, hasDebounce } from '../tilegeom.js';
+import { axisOwner, ownerName, sideOwner, stickAt, stickCount, stickSummary, defaultDeadzone,
+         withStickAxes, withoutStickAxes, withStickSide, withoutStickOutputs, withStickField,
+         calStart, calFeed, calProgress, calReady, STICK_DEADZONE_MAX, STICK_AXIS_FULL } from '../stick.js';
 import { RUMBLE_CODE_MAX, bindFor, bindsOf, withBind, withoutBind,
          ledActionsOf, withLedAction, withoutLedAction, RUMBLE_LED_MAX, LED_FX,
          textsOf, textFor, withText, withoutText, RUMBLE_TEXT_MAX,
@@ -42,7 +45,7 @@ const pickerOf = (attr, cur, disabled = '') => {
       <input type="color" ${attr} value="#${custom ? cur : 'ffffff'}" ${disabled}></label>`;
 };
 const FX = ['solid', 'blink', 'fast', 'breathe'];
-const AXES = [1, 2, 3, 4];                       // ENC_AXIS_COUNT, §15.5
+const AXES = [1, 2, 3, 4];                       // ENC_AXIS_COUNT, §15.5; sticks share them (§17.4)
 // Axis counts per click (§15.4). The FRC Driver Station sends each axis to
 // the robot as 8 bits, so 256 is one robot-visible step per click; smaller
 // values need several clicks per step, larger ones reach the end sooner.
@@ -105,7 +108,23 @@ const buttonsAt = (addr, key) =>
 const bindingAt = (addr, key) => buttonsAt(addr, key)[0];
 const sourcesOf = (btn) => (state.map?.bind ?? []).filter(b => b.btn === btn);
 const encAt = (addr, idx) => (state.map?.enc ?? []).find(e => e.addr === addr && e.idx === idx);
-const axisOwner = (axis) => (state.map?.enc ?? []).find(e => e.axis === axis);
+// Who holds an frc axis, encoder or stick: `dup_axis` spans both (§17.4).
+const ownerOf = (axis) => axisOwner(state.map, axis);
+const encOwns = (o, addr, idx) => o?.kind === 'enc' && o.addr === addr && o.idx === idx;
+
+// A stick calibration this page started (§17.6): {addr, idx, phase, c}.
+// `ready` is the "let go of it" prompt before anything is sent; `running` is
+// after `stick cal`, with `c` this page's own view of the travel so far.
+// While it runs the board reports that stick centred, so it must not be left
+// running by navigating away: `endCal` is called from every way out.
+let calRun = null;
+async function endCal() {
+  if (calRun?.phase !== 'running') { calRun = null; return; }
+  calRun = null;
+  try { await state.client.stickCalCancel(); } catch { /* the board drops it on close anyway */ }
+}
+// Called by app.js when another screen is shown.
+export function leave() { return endCal(); }
 
 // What this page last put in the boxes for each panel, keyed by address.
 //
@@ -263,6 +282,13 @@ function selectedTile() {
   return online.find(t => t.addr === sel.addr) ?? online[0];
 }
 
+// For a `pushMap` mutation that is a whole new map from one of stick.js's
+// helpers: becoming it in place, sections it dropped included.
+function adopt(m, next) {
+  for (const k of Object.keys(m)) delete m[k];
+  Object.assign(m, next);
+}
+
 async function pushMap(mutate, msg) {
   const m = structuredClone(state.map ?? { v: 1, bind: [] });
   m.bind = m.bind ?? [];
@@ -270,6 +296,7 @@ async function pushMap(mutate, msg) {
   // §15.7: an entry with neither axis nor cw/ccw binds the encoder to nothing.
   m.enc = (m.enc ?? []).filter(e => e.axis || e.cw || e.ccw || e.trigger);
   if (!m.enc.length) delete m.enc;
+  if (m.stick && !m.stick.length) delete m.stick;
   if (!(m.rumble ?? []).length) delete m.rumble;
   if (m.debounce && !Object.keys(m.debounce).length) delete m.debounce;
   if (m.disp && !Object.keys(m.disp).length) delete m.disp;
@@ -1099,14 +1126,14 @@ function inspectEnc(t) {
       <div class="group">
         <button class="chip ${!e.axis ? 'sel' : ''}" data-axis="0">none</button>
         ${AXES.map(a => {
-          const owner = axisOwner(a);
-          const mine = owner && owner.addr === t.addr && owner.idx === sel.idx;
+          const owner = ownerOf(a);
+          const mine = encOwns(owner, t.addr, sel.idx);
           const taken = owner && !mine;
           return `<button class="chip ${mine ? 'sel' : ''} ${taken ? 'taken' : ''}" data-axis="${a}"
-                    title="${taken ? `already axis ${a} on tile ${owner.addr} ENC${owner.idx + 1}` : `axis ${a}`}">${a}</button>`;
+                    title="${taken ? `already axis ${a} on ${ownerName(owner)}` : `axis ${a}`}">${a}</button>`;
         }).join('')}
       </div>
-      <p class="muted small">The board has four axes in total, so two encoder tiles use them all.
+      <p class="muted small">The board has four axes in total, shared with any sticks, so two encoder tiles use them all.
         ${xinput ? 'This board is in <code>xinput</code>, which has no axes at all — the buttons below are what it will use.' : ''}</p>
       <p><label><input type="checkbox" id="invert" ${e.invert ? 'checked' : ''}> Invert — counter-clockwise counts up</label></p>
       <p><label>Scale <select id="scale">
@@ -1147,6 +1174,171 @@ function inspectEnc(t) {
     </div>`;
 }
 
+// ---- sticks, §17 ------------------------------------------------------------
+
+// Where a stick is, as -1..1 with Y up: the raw reading about the converter's
+// middle, and the output the module computes from it (`tiles` → `stick`).
+const rawUnit = (t, i) => {
+  const r = t.axisRaw ?? [];
+  const u = (v) => v == null ? 0 : (v - 32768) / 32768;
+  return [u(r[2 * i]), u(r[2 * i + 1])];
+};
+const outUnit = (t, i) => {
+  const o = t.stick?.[i] ?? [0, 0];
+  return [o[0] / STICK_AXIS_FULL, o[1] / STICK_AXIS_FULL];
+};
+
+/**
+ * A stick seen from above: its travel as a circle, the raw reading as a ring
+ * and the output as a dot. The two differ by exactly what the map does to the
+ * stick — calibration, invert, deadzone — so the gap between them is the
+ * thing worth looking at. Both are patched by tick() rather than rebuilt.
+ */
+function stickSvg(t, i, size) {
+  const [rx, ry] = rawUnit(t, i), [ox, oy] = outUnit(t, i);
+  return `<svg class="stickview" width="${size}" height="${size}" viewBox="-1.15 -1.15 2.3 2.3" aria-hidden="true">
+    <circle r="1" class="stick-edge"/>
+    <path d="M-1 0H1M0 -1V1" class="stick-cross"/>
+    <circle r=".13" cx="${rx.toFixed(3)}" cy="${(-ry).toFixed(3)}" class="stick-raw" data-stick-raw="${t.addr},${i}"/>
+    <circle r=".09" cx="${ox.toFixed(3)}" cy="${(-oy).toFixed(3)}" class="stick-out" data-stick-out="${t.addr},${i}"/>
+  </svg>`;
+}
+
+const calText = (cal) => cal
+  ? `X ${cal[0]} · ${cal[1]} · ${cal[2]}, Y ${cal[3]} · ${cal[4]} · ${cal[5]}`
+  : 'none, so the full converter range is used: 0 · 32768 · 65535';
+
+// One direction of the calibration's progress, patched by tick().
+const calBar = (label, a, side) =>
+  `<div class="calbar"><span class="muted small">${label}</span><span class="calbar-track"><span class="calbar-fill" data-cal="${a},${side}"></span></span></div>`;
+
+function inspectStick(t) {
+  const s = stickAt(state.map, t.addr, sel.idx) ?? {};
+  const usb = state.hello?.usb;
+  const xinput = usb === 'xinput';
+  const name = `STICK${stickCount(t) > 1 ? sel.idx + 1 : ''}`;
+  const run = calRun && calRun.addr === t.addr && calRun.idx === sel.idx ? calRun : null;
+  const pushBtns = buttonsAt(t.addr, 2 * sel.idx);   // stick1's push is K1; a two-stick tile is TBD (§17)
+  const click = s.xinput === 'right' ? 10 : 9;       // R3 / L3, §8.5
+  const axisSel = (which) => `<select data-stick-axis="${which}">
+      <option value="">—</option>
+      ${AXES.map(a => {
+        const o = ownerOf(a);
+        const mine = o?.kind === 'stick' && o.addr === t.addr && o.idx === sel.idx;
+        return `<option value="${a}" ${s[which] === a ? 'selected' : ''}>${a}${o && !mine ? ` · now ${ownerName(o)}` : ''}</option>`;
+      }).join('')}
+    </select>`;
+  const out = t.stick?.[sel.idx] ?? [0, 0];
+  const raw = (t.axisRaw ?? []).slice(2 * sel.idx, 2 * sel.idx + 2);
+
+  return `
+    <div>
+      <div class="insp-title">Selected stick</div>
+      <div class="insp-head"><strong>${name}</strong> <span class="mono muted">tile ${t.addr}</span></div>
+      <div class="stickinsp">
+        ${stickSvg(t, sel.idx, 120)}
+        <div class="small">
+          <div class="muted">raw (ring)</div>
+          <div class="mono" data-stick-rawtext="${t.addr},${sel.idx}">${raw[0] ?? '—'} · ${raw[1] ?? '—'}</div>
+          <div class="muted">output (dot)</div>
+          <div class="mono" data-stick-outtext="${t.addr},${sel.idx}">${out[0]} · ${out[1]}</div>
+        </div>
+      </div>
+      ${run?.phase === 'running' ? '<p class="muted small">Reads centred while it is being calibrated.</p>' : ''}
+    </div>
+
+    <div>
+      <div class="insp-title">Thumbstick (xinput)</div>
+      <div class="group">
+        ${[['', 'none'], ['left', 'Left'], ['right', 'Right']].map(([v, label]) => {
+          const o = v && sideOwner(state.map, v);
+          const taken = o && !(o.addr === t.addr && (o.idx ?? 0) === sel.idx);
+          return `<button class="chip ${(s.xinput ?? '') === v ? 'sel' : ''} ${taken ? 'taken' : ''}" data-side="${v}"
+                    title="${taken ? `now tile ${o.addr}'s stick — choosing it moves it here` : label}">${label}</button>`;
+        }).join('')}
+      </div>
+      <p class="muted small">Under <code>xinput</code> the stick is the pad's left or right stick, exactly as on a
+        gamepad: <code>gamepad1.${s.xinput === 'right' ? 'right' : 'left'}_stick_x</code>. Keys bound to that stick's
+        directions (${s.xinput === 'right' ? '21–24' : '17–20'}) stop moving it.</p>
+      ${xinput && s.xinput ? `<p class="small">Push: ${pushBtns.includes(click) ? `K1 is ${btnLabel(click)}.`
+        : `<button data-push-btn="${click}">Make the push ${click === 10 ? 'R3' : 'L3'}</button>`}</p>` : ''}
+    </div>
+
+    <div>
+      <div class="insp-title">Axes (frc)</div>
+      <div class="dirpick"><span class="muted small">X, right is +</span> ${axisSel('x')}</div>
+      <div class="dirpick"><span class="muted small">Y, up is −</span> ${axisSel('y')}</div>
+      <p class="muted small">Two of the board's four axes, shared with encoders; choosing one another control holds
+        moves it here. The Driver Station reads up as negative, like an Xbox stick.</p>
+      <p class="muted small">${xinput
+        ? 'This board is in <code>xinput</code>, so the thumbstick above is what is used. Set both and one setup works in both modes.'
+        : 'This board is in <code>frc</code>, so these axes are what is used. Set both and one setup works in both modes.'}</p>
+      <button id="stick-move">Move the stick…</button>
+      ${s.x || s.xinput ? '<button id="stick-unbind">Remove outputs</button>' : ''}
+    </div>
+
+    <div>
+      <div class="insp-title">Calibration</div>
+      ${!run ? `
+        <p class="small">${calText(s.cal)}</p>
+        <button id="cal-begin">${s.cal ? 'Calibrate again…' : 'Calibrate…'}</button>`
+      : run.phase === 'ready' ? `
+        <p class="small"><strong>Let go of the stick</strong> so it sits at rest, then press Start: where it sits
+          then is its centre.</p>
+        <button id="cal-start" class="primary">Start</button> <button id="cal-cancel">Cancel</button>`
+      : `
+        <p class="small"><strong>Move it slowly round the whole edge</strong>, two or three times, then press Done.</p>
+        ${calBar('X left', 0, 'low')}${calBar('X right', 0, 'high')}${calBar('Y down', 1, 'low')}${calBar('Y up', 1, 'high')}
+        <p class="muted small" data-cal-state>${calReady(run.c) ? 'Far enough each way.' : 'Not far enough yet.'}</p>
+        <button id="cal-done" class="primary">Done</button> <button id="cal-cancel">Cancel</button>`}
+      <p class="muted small">Calibration is part of the stick's entry in the map, so Save keeps it.</p>
+    </div>
+
+    <div>
+      <div class="insp-title">Direction and deadzone</div>
+      <p><label><input type="checkbox" id="stick-inv-x" ${s.invertX ? 'checked' : ''}> Invert X</label>
+         <label><input type="checkbox" id="stick-inv-y" ${s.invertY ? 'checked' : ''}> Invert Y</label></p>
+      <p class="debounce"><label>Deadzone
+        <input type="number" id="stick-dz" min="0" max="${STICK_DEADZONE_MAX}" step="1"
+               value="${s.deadzone ?? defaultDeadzone(usb)}"> %</label>
+        <span class="muted small">default ${defaultDeadzone('frc')} % in frc, ${defaultDeadzone('xinput')} % in xinput</span>
+        ${s.deadzone != null ? '<button id="stick-dz-reset">Default</button>' : ''}</p>
+      <p class="muted small">Inside the deadzone the stick reads centred, which hides a spring that does not quite
+        return. The FTC SDK adds its own 15 %, so xinput's default is none.</p>
+    </div>`;
+}
+
+// tick(): the stick's ring, dot and numbers, and a running calibration's bars.
+function patchSticks(root) {
+  for (const el of root.querySelectorAll('[data-stick-raw],[data-stick-out]')) {
+    const [addr, i] = (el.dataset.stickRaw ?? el.dataset.stickOut).split(',').map(Number);
+    const t = state.tiles.find(x => x.addr === addr);
+    if (!t) continue;
+    const [x, y] = el.dataset.stickRaw ? rawUnit(t, i) : outUnit(t, i);
+    el.setAttribute('cx', x.toFixed(3));
+    el.setAttribute('cy', (-y).toFixed(3));
+  }
+  for (const el of root.querySelectorAll('[data-stick-rawtext],[data-stick-outtext]')) {
+    const [addr, i] = (el.dataset.stickRawtext ?? el.dataset.stickOuttext).split(',').map(Number);
+    const t = state.tiles.find(x => x.addr === addr);
+    if (!t) continue;
+    const v = el.dataset.stickRawtext ? (t.axisRaw ?? []).slice(2 * i, 2 * i + 2) : (t.stick?.[i] ?? []);
+    el.textContent = `${v[0] ?? '—'} · ${v[1] ?? '—'}`;
+  }
+  if (calRun?.phase !== 'running') return;
+  const t = state.tiles.find(x => x.addr === calRun.addr);
+  if (t?.axisRaw) calFeed(calRun.c, t.axisRaw.slice(2 * calRun.idx, 2 * calRun.idx + 2));
+  const p = calProgress(calRun.c);
+  for (const el of root.querySelectorAll('[data-cal]')) {
+    const [a, side] = el.dataset.cal.split(',');
+    const f = p[+a][side];
+    el.style.width = `${Math.round(f * 100)}%`;
+    el.classList.toggle('full', f >= 1);
+  }
+  const st = root.querySelector('[data-cal-state]');
+  if (st) st.textContent = calReady(calRun.c) ? 'Far enough each way.' : 'Not far enough yet.';
+}
+
 export function render(root) {
   subscribe();
   // Where the reader was, before any of this is torn down. A rebuild reached
@@ -1161,6 +1353,7 @@ export function render(root) {
   // panel on the one tile whose only control is its screen.
   if (t && sel.kind === 'key' && !t.keys && hasPanel(t)) sel.kind = 'disp';
   if (t && sel.kind === 'disp' && !hasPanel(t)) { sel.kind = 'key'; sel.idx = 0; }
+  if (t && sel.kind === 'stick' && sel.idx >= stickCount(t)) { sel.kind = 'key'; sel.idx = 0; }
 
   if (!t) {
     root.innerHTML = `<div style="padding:1.25rem"><p>No tiles found. Check the cables between the main module and the tiles.</p></div>`;
@@ -1181,13 +1374,17 @@ export function render(root) {
           const xg = geom(x);
           return `<button class="tilecard ${x.addr === t.addr ? 'sel' : ''} ${x.state === 'lost' ? 'lost' : ''}" data-tile="${x.addr}">
             <div class="tilecard-top"><span class="tilecard-name">${xg.name}</span><span class="mono muted">addr ${x.addr}</span></div>
-            <div class="mono muted tilecard-sub">${x.type} · ${x.keys} key${x.keys === 1 ? '' : 's'}${x.enc ? ` · ${x.enc} enc` : ''}${x.cols ? ` · ${x.cols}×${x.rows}` : ''}${x.state === 'lost' ? ' · lost' : ''}</div>
+            <div class="mono muted tilecard-sub">${x.type} · ${x.keys} key${x.keys === 1 ? '' : 's'}${x.enc ? ` · ${x.enc} enc` : ''}${stickCount(x) ? ` · ${stickCount(x)} stick` : ''}${x.cols ? ` · ${x.cols}×${x.rows}` : ''}${x.state === 'lost' ? ' · lost' : ''}</div>
             <div class="tilecard-dots">
               ${Array.from({ length: x.keys }, (_, k) =>
                 `<span class="dot ${bindingAt(x.addr, k) ? 'bound' : ''} ${x.pressed?.includes(k) ? 'down' : ''}"
                        data-dot="${x.addr},${k}" style="border-radius:${xg.shape === 'round' ? '999px' : '3px'}"></span>`).join('')}
               ${Array.from({ length: x.enc ?? 0 }, (_, i) =>
                 `<span class="dot ring ${encAt(x.addr, i) ? 'bound' : ''}"></span>`).join('')}
+              ${Array.from({ length: stickCount(x) }, (_, i) => {
+                const s = stickAt(state.map, x.addr, i);
+                return `<span class="dot ring ${s?.x || s?.xinput ? 'bound' : ''}"></span>`;
+              }).join('')}
             </div>
           </button>`;
         }).join('')}
@@ -1201,7 +1398,7 @@ export function render(root) {
         <span class="mono muted">${t.type} · uid ${t.uid} · fw ${t.fw}</span>
       </div>
       <p class="muted">${t.keys || t.enc
-        ? `Click a key${t.enc ? ' or a knob' : ''} to bind it${hasPanel(t) ? ', or the panel to write to it' : ''}. Controls are laid out as they sit on the tile; K1 is the K1 printed on the tile.`
+        ? `Click a key${t.enc ? ' or a knob' : ''}${stickCount(t) ? ' or the stick' : ''} to bind it${hasPanel(t) ? ', or the panel to write to it' : ''}. Controls are laid out as they sit on the tile; K1 is the K1 printed on the tile.`
         : 'This tile has no keys — its panel is the whole of it. Type into the rows and draw.'}</p>
 
       <div class="tileview">
@@ -1229,11 +1426,22 @@ export function render(root) {
               </button>`;
             }).join('')}
           </div>` : ''}
+          ${stickCount(t) ? `<div class="encstrip">
+            ${Array.from({ length: stickCount(t) }, (_, i) => {
+              const s = stickAt(state.map, t.addr, i);
+              return `<button class="knob stickknob ${sel.kind === 'stick' && i === sel.idx ? 'sel' : ''} ${s?.x || s?.xinput ? 'bound' : ''}" data-stick="${i}">
+                ${stickSvg(t, i, 64)}
+                <span class="keycell-k">STICK${stickCount(t) > 1 ? i + 1 : ''}</span>
+                <span class="knob-b">${stickSummary(s)}</span>
+              </button>`;
+            }).join('')}
+          </div>` : ''}
           ${hasPanel(t) ? panelView(t) : ''}
         </div>
       </div>
       ${hasDebounce(t) ? debounceView(t) : ''}
       ${encoderNote(t) ? `<p class="muted small">${encoderNote(t)}</p>` : ''}
+      ${stickNote(t) ? `<p class="muted small">${stickNote(t)}</p>` : ''}
       ${displayNote(t) ? `<p class="muted small">${displayNote(t)}</p>` : ''}
 
       <div class="legend muted">
@@ -1245,7 +1453,7 @@ export function render(root) {
     </section>
 
     <aside class="cfg-inspect">
-      ${sel.kind === 'disp' ? inspectDisp(t) : sel.kind === 'enc' ? inspectEnc(t) : inspectKey(t)}
+      ${sel.kind === 'disp' ? inspectDisp(t) : sel.kind === 'enc' ? inspectEnc(t) : sel.kind === 'stick' ? inspectStick(t) : inspectKey(t)}
     </aside>
   </div>`;
 
@@ -1296,6 +1504,38 @@ export function render(root) {
         if (cur) cur.invert = el.checked;
         else m.enc.push({ addr: t.addr, idx: sel.idx, invert: el.checked });
       }, el.checked ? 'Rotation inverted' : 'Rotation normal');
+      return render(root);
+    }
+    // A stick's frc axes go together (§17.6: both or neither). Choosing one
+    // with the other unset takes its partner in the pair, 1·2 or 3·4;
+    // choosing the axis the other already has swaps them.
+    if (el.dataset.stickAxis) {
+      const s = stickAt(state.map, t.addr, sel.idx) ?? {};
+      const which = el.dataset.stickAxis, other = which === 'x' ? 'y' : 'x';
+      if (!el.value) {
+        await pushMap(m => adopt(m, withoutStickAxes(m, t.addr, sel.idx)), 'Stick off the frc axes (unsaved)');
+        return render(root);
+      }
+      const a = +el.value;
+      let o = s[other];
+      if (!o) o = a % 2 ? a + 1 : a - 1;
+      else if (o === a) o = s[which];
+      const x = which === 'x' ? a : o, y = which === 'x' ? o : a;
+      const { taken } = withStickAxes(state.map, t.addr, sel.idx, x, y);
+      await pushMap(m => adopt(m, withStickAxes(m, t.addr, sel.idx, x, y).map),
+        `Stick → axes X ${x}, Y ${y}${taken.length ? ` (taken from ${taken.map(ownerName).join(', ')})` : ''} (unsaved)`);
+      return render(root);
+    }
+    if (el.id === 'stick-inv-x' || el.id === 'stick-inv-y') {
+      const f = el.id === 'stick-inv-x' ? 'invertX' : 'invertY';
+      await pushMap(m => adopt(m, withStickField(m, t.addr, sel.idx, f, el.checked)),
+        `${f === 'invertX' ? 'X' : 'Y'} ${el.checked ? 'inverted' : 'normal'} (unsaved)`);
+      return render(root);
+    }
+    if (el.id === 'stick-dz') {
+      const v = Math.round(+el.value);
+      if (!(v >= 0 && v <= STICK_DEADZONE_MAX)) { setStatus(`Deadzone is 0 to ${STICK_DEADZONE_MAX} %`, 'fault'); return render(root); }
+      await pushMap(m => adopt(m, withStickField(m, t.addr, sel.idx, 'deadzone', v)), `Deadzone ${v} % (unsaved)`);
       return render(root);
     }
     if (el.id === 'disp-contrast') {
@@ -1407,8 +1647,13 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger]');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger],[data-stick],[data-side],[data-push-btn],#stick-move,#stick-unbind,#stick-dz-reset,#cal-begin,#cal-start,#cal-done,#cal-cancel');
     if (!el) return;
+
+    // Any change of selection away from a stick being calibrated ends the
+    // calibration first, since the board reports that stick centred until then.
+    if (calRun && (el.dataset.tile || el.dataset.key || el.dataset.enc || el.dataset.dispSel ||
+        (el.dataset.stick && +el.dataset.stick !== calRun.idx))) await endCal();
 
     if (el.id === 'debounce-reset') {
       await pushMap(m => { m.debounce = { ...(m.debounce ?? {}) }; delete m.debounce[t.addr]; },
@@ -1498,6 +1743,91 @@ export function render(root) {
     if (el.dataset.tile) { sel = { addr: +el.dataset.tile, kind: 'key', idx: 0 }; return render(root); }
     if (el.dataset.key)  { sel.kind = 'key'; sel.idx = +el.dataset.key; return render(root); }
     if (el.dataset.enc)  { sel.kind = 'enc'; sel.idx = +el.dataset.enc; return render(root); }
+    if (el.dataset.stick) { sel.kind = 'stick'; sel.idx = +el.dataset.stick; return render(root); }
+
+    if (el.dataset.side !== undefined) {
+      const side = el.dataset.side || null;
+      const { map: next, taken } = withStickSide(state.map, t.addr, sel.idx, side);
+      await pushMap(m => adopt(m, next),
+        side ? `Stick → ${side} thumbstick in xinput${taken ? ` (was tile ${taken.addr}'s)` : ''} (unsaved)`
+             : 'Stick off the xinput thumbsticks (unsaved)');
+      return render(root);
+    }
+    // The click under a thumbstick: K1 (the push) becomes L3 or R3 alone.
+    if (el.dataset.pushBtn) {
+      const n = +el.dataset.pushBtn, key = 2 * sel.idx;
+      await pushMap(m => {
+        m.bind = m.bind.filter(b => !(b.addr === t.addr && b.key === key));
+        m.bind.push({ btn: n, addr: t.addr, key });
+      }, `K${key + 1} → ${btnLabel(n)} (unsaved)`);
+      return render(root);
+    }
+    if (el.id === 'stick-unbind') {
+      try {
+        await state.client.unbindStick(t.addr, sel.idx);
+        await refreshMap();
+        setStatus('Stick outputs removed, calibration kept (unsaved)', 'ok');
+      } catch (err) { setStatus(`Unbind: ${err.message}`, 'fault'); }
+      return render(root);
+    }
+    if (el.id === 'stick-dz-reset') {
+      await pushMap(m => adopt(m, withStickField(m, t.addr, sel.idx, 'deadzone', null)),
+        `Deadzone back to the default, ${defaultDeadzone(state.hello?.usb)} % here (unsaved)`);
+      return render(root);
+    }
+    // Bind by doing (§17.6): whichever stick is pushed past half travel gets
+    // this stick's output, or the personality's natural one if it has none.
+    if (el.id === 'stick-move') {
+      const s = stickAt(state.map, t.addr, sel.idx) ?? {};
+      const xinput = state.hello?.usb === 'xinput';
+      let run, what;
+      if (xinput) {
+        const side = s.xinput ?? (sideOwner(state.map, 'left') ? (sideOwner(state.map, 'right') ? 'left' : 'right') : 'left');
+        run = () => state.client.bindStickSide(side);
+        what = `the ${side} thumbstick`;
+      } else {
+        // Its own axes, else the first free pair, else 1·2 (taken from whoever has them).
+        const free = (a) => !ownerOf(a);
+        const [x, y] = s.x ? [s.x, s.y] : free(1) && free(2) ? [1, 2] : free(3) && free(4) ? [3, 4] : [1, 2];
+        run = () => state.client.bindStickAxes(x, y);
+        what = `axes ${x}·${y}`;
+      }
+      setStatus(`Push the stick you want as ${what}…`, 'fault');
+      try {
+        const r = await run();
+        setStatus(`${what[0].toUpperCase()}${what.slice(1)} ← tile ${r.addr} stick (unsaved)`, 'ok');
+        sel = { addr: r.addr, kind: 'stick', idx: r.idx ?? 0 };
+      } catch (err) { setStatus(`Bind: ${err.message}`, 'fault'); }
+      await refreshMap(); await refreshTiles({ rerender: false });
+      return render(root);
+    }
+    if (el.id === 'cal-begin') { calRun = { addr: t.addr, idx: sel.idx, phase: 'ready' }; return render(root); }
+    if (el.id === 'cal-cancel') { await endCal(); setStatus('Calibration cancelled', 'ok'); return render(root); }
+    if (el.id === 'cal-start') {
+      await refreshTiles({ rerender: false });
+      const cur = state.tiles.find(x => x.addr === t.addr);
+      try {
+        await state.client.stickCal(t.addr, sel.idx);
+        calRun = { addr: t.addr, idx: sel.idx, phase: 'running',
+                   c: calStart((cur?.axisRaw ?? [32768, 32768]).slice(2 * sel.idx, 2 * sel.idx + 2)) };
+        setStatus('Calibrating: move the stick round the whole edge, then Done', 'fault');
+      } catch (err) { calRun = null; setStatus(`Calibrate: ${err.message}`, 'fault'); }
+      return render(root);
+    }
+    if (el.id === 'cal-done') {
+      // The board ends the calibration whatever it answers, so this page does too.
+      calRun = null;
+      try {
+        await state.client.stickCalDone();
+        await refreshMap();
+        setStatus('Calibrated (unsaved). Save to board to keep it', 'ok');
+      } catch (err) {
+        setStatus(err.message === 'range'
+          ? `${(err.response?.axis ?? 'one axis').toUpperCase()} did not go far enough each way. Calibrate again and push right to the edge`
+          : `Calibrate: ${err.message}`, 'fault');
+      }
+      return render(root);
+    }
     if (el.dataset.dispSel) { sel.kind = 'disp'; return render(root); }
 
     if (el.id === 'disp-send') {
@@ -1699,9 +2029,9 @@ export function render(root) {
 
     if (el.dataset.axis) {
       const a = +el.dataset.axis;
-      const owner = axisOwner(a);
-      if (a && owner && !(owner.addr === t.addr && owner.idx === sel.idx)) {
-        return setStatus(`Axis ${a} is already tile ${owner.addr} ENC${owner.idx + 1}`, 'fault');
+      const owner = ownerOf(a);
+      if (a && owner && !encOwns(owner, t.addr, sel.idx)) {
+        return setStatus(`Axis ${a} is already ${ownerName(owner)}`, 'fault');
       }
       await pushMap(m => {
         m.enc = m.enc ?? [];
@@ -1722,7 +2052,9 @@ export function render(root) {
 
     if (el.id === 'turn') {
       const cur = encAt(t.addr, sel.idx);
-      const axis = cur?.axis ?? AXES.find(a => !axisOwner(a));
+      // Only a free axis: `bind axis` takes it off another encoder but not off
+      // a stick, so offering a stick's axis here would leave two controls on it.
+      const axis = cur?.axis ?? AXES.find(a => !ownerOf(a));
       if (!axis) return setStatus('All four axes are taken', 'fault');
       setStatus(`Turn the knob you want as axis ${axis}…`, 'fault');
       try {
@@ -1888,4 +2220,5 @@ export function tick(root) {
     const out = root.querySelector('.insp-head + p .mono');
     if (out) out.textContent = t.encPos[sel.idx] ?? '—';
   }
+  patchSticks(root);
 }
