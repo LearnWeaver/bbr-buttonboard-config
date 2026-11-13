@@ -635,9 +635,11 @@ export class MockTransport {
             const t = this.tiles.find(x => x.enc);
             const idx = Math.floor(Math.random() * t.enc);
             // map_bind_axis: the axis leaves whoever had it, and the encoder
-            // keeps its other fields (direction buttons, trigger)
+            // keeps its other fields (direction buttons, trigger). A stick
+            // that had it loses both axes and keeps its side (rev 0.43).
             this.map.enc = (this.map.enc ?? []).map(x => x.axis === axis ? { ...x, axis: undefined } : x)
               .filter(x => x.axis || x.cw || x.ccw || x.trigger);
+            for (const s of this.map.stick ?? []) if (s.x === axis || s.y === axis) { delete s.x; delete s.y; }
             const cur = this.map.enc.find(x => x.addr === t.addr && x.idx === idx);
             if (cur) cur.axis = axis; else this.map.enc.push({ axis, addr: t.addr, idx, invert: false });
             this._emit({ ev: 'enc', addr: t.addr, idx, dir: 1 });

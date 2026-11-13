@@ -1,6 +1,6 @@
 {
   "v": 1,
-  "generated": "2026-11-03T06:06:11Z",
+  "generated": "2026-11-13T14:43:56Z",
   "images": [
     {
       "type": "arc4",
@@ -11,6 +11,18 @@
       "file": "tile-arc4-0.2.0.bin",
       "size": 4175,
       "crc16": "B083",
+      "leds": 0,
+      "notes": ""
+    },
+    {
+      "type": "arc4",
+      "typeId": 2,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-arc4-0.2.1.bin",
+      "size": 4175,
+      "crc16": "F234",
       "leds": 0,
       "notes": ""
     },
@@ -27,6 +39,18 @@
       "notes": ""
     },
     {
+      "type": "disp1",
+      "typeId": 16,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-disp1-0.2.1.bin",
+      "size": 8489,
+      "crc16": "74AF",
+      "leds": 0,
+      "notes": ""
+    },
+    {
       "type": "disp2",
       "typeId": 18,
       "mcu": "attiny1626",
@@ -35,6 +59,18 @@
       "file": "tile-disp2-0.2.0.bin",
       "size": 11099,
       "crc16": "2FDE",
+      "leds": 0,
+      "notes": ""
+    },
+    {
+      "type": "disp2",
+      "typeId": 18,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-disp2-0.2.1.bin",
+      "size": 11099,
+      "crc16": "1EA8",
       "leds": 0,
       "notes": ""
     },
@@ -51,6 +87,18 @@
       "notes": ""
     },
     {
+      "type": "enc1",
+      "typeId": 9,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-enc1-0.2.1.bin",
+      "size": 4451,
+      "crc16": "A024",
+      "leds": 0,
+      "notes": ""
+    },
+    {
       "type": "mx1",
       "typeId": 4,
       "mcu": "attiny1626",
@@ -59,6 +107,18 @@
       "file": "tile-mx1-led1-0.2.0.bin",
       "size": 4893,
       "crc16": "C66D",
+      "leds": 1,
+      "notes": ""
+    },
+    {
+      "type": "mx1",
+      "typeId": 4,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-mx1-led1-0.2.1.bin",
+      "size": 4893,
+      "crc16": "7FA5",
       "leds": 1,
       "notes": ""
     },
@@ -75,6 +135,18 @@
       "notes": ""
     },
     {
+      "type": "mx3",
+      "typeId": 8,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-mx3-led3-0.2.1.bin",
+      "size": 4963,
+      "crc16": "5955",
+      "leds": 3,
+      "notes": ""
+    },
+    {
       "type": "mx4",
       "typeId": 10,
       "mcu": "attiny1626",
@@ -83,6 +155,18 @@
       "file": "tile-mx4-led4-0.2.0.bin",
       "size": 5015,
       "crc16": "3235",
+      "leds": 4,
+      "notes": ""
+    },
+    {
+      "type": "mx4",
+      "typeId": 10,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-mx4-led4-0.2.1.bin",
+      "size": 5015,
+      "crc16": "227A",
       "leds": 4,
       "notes": ""
     },
@@ -99,6 +183,18 @@
       "notes": ""
     },
     {
+      "type": "mx6rgb",
+      "typeId": 7,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-mx6rgb-led6-0.2.1.bin",
+      "size": 5049,
+      "crc16": "D5A6",
+      "leds": 6,
+      "notes": ""
+    },
+    {
       "type": "mx9rgb",
       "typeId": 3,
       "mcu": "attiny1626",
@@ -107,6 +203,18 @@
       "file": "tile-mx9rgb-led9-0.2.0.bin",
       "size": 5058,
       "crc16": "FEE2",
+      "leds": 9,
+      "notes": ""
+    },
+    {
+      "type": "mx9rgb",
+      "typeId": 3,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-mx9rgb-led9-0.2.1.bin",
+      "size": 5058,
+      "crc16": "86B7",
       "leds": 9,
       "notes": ""
     },
@@ -121,13 +229,37 @@
       "crc16": "6B30",
       "leds": 0,
       "notes": ""
+    },
+    {
+      "type": "screenkey1",
+      "typeId": 17,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-screenkey1-0.2.1.bin",
+      "size": 11115,
+      "crc16": "0964",
+      "leds": 0,
+      "notes": ""
+    },
+    {
+      "type": "stick1",
+      "typeId": 19,
+      "mcu": "attiny1626",
+      "fw": "0.2.1",
+      "proto": 1,
+      "file": "tile-stick1-0.2.1.bin",
+      "size": 4349,
+      "crc16": "4DE5",
+      "leds": 0,
+      "notes": ""
     }
   ],
   "main": {
-    "fw": "0.2.0",
-    "build": "ed45fb7",
-    "file": "bb_main-0.2.0.uf2",
-    "size": 235008,
+    "fw": "0.2.1",
+    "build": "6a5832c",
+    "file": "bb_main-0.2.1.uf2",
+    "size": 235520,
     "proto": 1,
     "notes": ""
   }

@@ -2052,8 +2052,9 @@ export function render(root) {
 
     if (el.id === 'turn') {
       const cur = encAt(t.addr, sel.idx);
-      // Only a free axis: `bind axis` takes it off another encoder but not off
-      // a stick, so offering a stick's axis here would leave two controls on it.
+      // A free axis, so the bind displaces nobody. A board before PROTOCOL.md
+      // rev 0.43 also left a stick on an axis `bind axis` took, which this
+      // still avoids for anyone who has not updated the main module.
       const axis = cur?.axis ?? AXES.find(a => !ownerOf(a));
       if (!axis) return setStatus('All four axes are taken', 'fault');
       setStatus(`Turn the knob you want as axis ${axis}…`, 'fault');
