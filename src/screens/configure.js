@@ -11,6 +11,7 @@
 //     the one under your hand.
 import { state, refreshMap, refreshTiles, setStatus, render as rerender } from '../app.js';
 import { geom, encoderNote, displayNote, stickNote, defaultDebounce, hasDebounce } from '../tilegeom.js';
+import { TILE_NAME_MAX, tileName, tileNameError, withTileName } from '../names.js';
 import { axisOwner, ownerName, sideOwner, stickAt, stickCount, stickSummary, defaultDeadzone,
          withStickAxes, withoutStickAxes, withStickSide, withoutStickOutputs, withStickField,
          calStart, calFeed, calProgress, calReady, STICK_DEADZONE_MAX, STICK_AXIS_FULL } from '../stick.js';
@@ -300,6 +301,7 @@ async function pushMap(mutate, msg) {
   if (!(m.rumble ?? []).length) delete m.rumble;
   if (m.debounce && !Object.keys(m.debounce).length) delete m.debounce;
   if (m.disp && !Object.keys(m.disp).length) delete m.disp;
+  if (m.names && !Object.keys(m.names).length) delete m.names;
   try {
     await state.client.mapSet(m);
     await refreshMap();
@@ -310,6 +312,7 @@ async function pushMap(mutate, msg) {
 }
 
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
 
 /**
  * What the module does with a code that arrives, mirrored here as a draft.
@@ -1373,7 +1376,7 @@ export function render(root) {
         ${tiles.map(x => {
           const xg = geom(x);
           return `<button class="tilecard ${x.addr === t.addr ? 'sel' : ''} ${x.state === 'lost' ? 'lost' : ''}" data-tile="${x.addr}">
-            <div class="tilecard-top"><span class="tilecard-name">${xg.name}</span><span class="mono muted">addr ${x.addr}</span></div>
+            <div class="tilecard-top"><span class="tilecard-name">${esc(tileName(state.map, x.addr) || xg.name)}</span><span class="mono muted">addr ${x.addr}</span></div>
             <div class="mono muted tilecard-sub">${x.type} · ${x.keys} key${x.keys === 1 ? '' : 's'}${x.enc ? ` · ${x.enc} enc` : ''}${stickCount(x) ? ` · ${stickCount(x)} stick` : ''}${x.cols ? ` · ${x.cols}×${x.rows}` : ''}${x.state === 'lost' ? ' · lost' : ''}</div>
             <div class="tilecard-dots">
               ${Array.from({ length: x.keys }, (_, k) =>
@@ -1394,9 +1397,14 @@ export function render(root) {
 
     <section class="cfg-canvas">
       <div class="cfg-head">
-        <h2>${g.name} tile</h2>
-        <span class="mono muted">${t.type} · uid ${t.uid} · fw ${t.fw}</span>
+        <h2>${esc(tileName(state.map, t.addr) || `${g.name} tile`)}</h2>
+        <span class="mono muted">${tileName(state.map, t.addr) ? `${g.name} · ` : ''}${t.type} · uid ${t.uid} · fw ${t.fw}</span>
       </div>
+      <label class="tilename muted">Name
+        <input id="tile-name" type="text" maxlength="${TILE_NAME_MAX}" spellcheck="false" autocomplete="off"
+               value="${escAttr(tileName(state.map, t.addr))}" placeholder="e.g. P1 buttons">
+        <span class="mono">saved with the board, ${TILE_NAME_MAX} characters</span>
+      </label>
       <p class="muted">${t.keys || t.enc
         ? `Click a key${t.enc ? ' or a knob' : ''}${stickCount(t) ? ' or the stick' : ''} to bind it${hasPanel(t) ? ', or the panel to write to it' : ''}. Controls are laid out as they sit on the tile; K1 is the K1 printed on the tile.`
         : 'This tile has no keys — its panel is the whole of it. Type into the rows and draw.'}</p>
@@ -1475,6 +1483,20 @@ export function render(root) {
       const hex = el.value.slice(1).toUpperCase();
       if (el.dataset.rgbPick !== undefined) swatch.dataset.rgb = hex; else swatch.dataset.rledRgb = hex;
       return root.onclick({ target: swatch });
+    }
+    // §9.5 rev 0.44: a tile's name lives in the map, so it goes wherever the
+    // board goes. A main module from before names drops the section without
+    // an error, which is only visible as the name not coming back.
+    if (el.id === 'tile-name') {
+      const n = el.value.trim();
+      const why = tileNameError(n);
+      if (why) { setStatus(`Name: ${why}`, 'fault'); return render(root); }
+      if (n === tileName(state.map, t.addr)) return;
+      await pushMap(m => adopt(m, withTileName(m, t.addr, n)),
+        n ? `Tile ${t.addr} named "${n}" (unsaved)` : `Tile ${t.addr} name cleared (unsaved)`);
+      if (tileName(state.map, t.addr) !== n)
+        setStatus('The main module did not keep the name: its firmware is older than tile names. Update it from the Firmware page', 'fault');
+      return render(root);
     }
     if (el.id === 'debounce') {
       const v = Math.round(+el.value);

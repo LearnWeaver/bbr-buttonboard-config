@@ -65,6 +65,9 @@ main.wide { padding:0; max-width:none; overflow:hidden; }
 .cfg-canvas { flex-grow:1; min-width:0; padding:1.25rem 1.5rem; display:flex; flex-direction:column; overflow:auto; }
 .cfg-head { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; }
 .cfg-head h2 { margin:0; font-size:1.1rem; }
+.tilename { display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; margin:.35rem 0 0; font-size:.85rem; }
+.tilename input { font:inherit; color:var(--ink); background:var(--surface); border:1px solid var(--rule); border-radius:3px; padding:.2rem .4rem; width:12rem; max-width:100%; }
+.tilename input:focus { outline:2px solid var(--accent); outline-offset:1px; }
 .tileview { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:1.75rem; display:flex; align-items:center; justify-content:center; flex-grow:1; margin:.75rem 0; }
 .keygrid { display:grid; gap:14px; }
 .keycell { width:92px; height:92px; border:1px solid var(--rule); background:var(--surface); color:inherit; font:inherit; cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; }

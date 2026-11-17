@@ -5,6 +5,7 @@
 // four-tile chain (firmware/host/test/test_sim_integration.c).
 import { crc16Running } from '../util.js';
 import { defaultDebounce } from '../tilegeom.js';
+import { namesCheck } from '../names.js';
 import { decodeXinputOut, rumblePacket, playerPacket, sdkByte, validateBinds,
          bindsOf, textsOf, isLedEntry, isTextEntry, applyLedActions, liveTileKey, mapFits } from '../rumble.js';
 import { stickAt, stickOutput, withStickAxes, withStickSide, withoutStickOutputs,
@@ -572,6 +573,11 @@ export class MockTransport {
             }
             if (Object.keys(disp).length) m.disp = disp; else delete m.disp;
           }
+          // map.c: names keys are tile addresses, each up to 16 printable
+          // characters (rev 0.44); an empty one is no entry.
+          const names = namesCheck(m.names);
+          if (names.err) return err(names.err, names.addr ? { addr: names.addr } : {});
+          if (names.canonical) m.names = names.canonical; else delete m.names;
           // map.c's canonical emit: legends, then messages, then LED
           // actions, each in the order given; hex upper case, 000000 as
           // `off`, `fx` only when it is not solid and never on `map`, and a
