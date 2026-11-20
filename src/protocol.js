@@ -189,6 +189,28 @@ export class ProtocolClient {
   dispSlotShow(addr, slot)  { return this._disp(`disp ${addr} slot ${slot} show`); }
   dispSlotErase(addr, slot) { return this._disp(`disp ${addr} slot ${slot} erase`); }
 
+  // RECT (§14.10): part of a stored picture, for putting back what a drawing
+  // covered. Only a tile whose `tiles` entry carries `draw` takes it.
+  dispSlotRect(addr, slot, x, y, w, h) {
+    return this._disp(`disp ${addr} slot ${slot} rect ${x} ${y} ${w} ${h}`);
+  }
+
+  // Vector drawing (§14.10), on a tile that reports `draw`. The tile
+  // rasterises; these carry end points. `rgb565` is the colour as four hex
+  // digits, `hex` the coordinates as byte pairs: x0 y0 x1 y1 per segment for
+  // `line` (1..16), x y per point for `poly` (2..32), x y w h per rectangle
+  // for `fill` (1..16). Every point must be on the panel -- the tile refuses
+  // rather than clips. Awaited, and `busy` means the tile is still drawing
+  // the frame before, which _disp() re-sends on like any other `busy`.
+  dispDraw(addr, kind, rgb565, hex) {
+    return this._disp(`disp ${addr} draw ${kind} ${rgb565} ${hex}`);
+  }
+  // Text at a pixel position in the tile's 12x16 glyphs, any two colours.
+  // The text is the rest of the line verbatim, as `disp ... text` is.
+  dispDrawText(addr, fg565, bg565, x, y, text) {
+    return this._disp(`disp ${addr} draw text ${fg565} ${bg565} ${x} ${y} ${text}`);
+  }
+
   // INFO and READ (§14.9 rev 0.35). INFO is one frame: `{empty}` or
   // `{fmt, attr, len, crc}` from the slot's header. READ is 1..16 bytes a
   // frame, the most the tile can read and send inside T_RESP_MAX.
