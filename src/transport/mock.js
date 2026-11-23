@@ -6,6 +6,7 @@
 import { crc16Running } from '../util.js';
 import { defaultDebounce } from '../tilegeom.js';
 import { namesCheck } from '../names.js';
+import { heartbeatCheck } from '../heartbeat.js';
 import { decodeXinputOut, rumblePacket, playerPacket, sdkByte, validateBinds,
          bindsOf, textsOf, isLedEntry, isTextEntry, applyLedActions, liveTileKey, mapFits } from '../rumble.js';
 import { stickAt, stickOutput, withStickAxes, withStickSide, withoutStickOutputs,
@@ -578,6 +579,11 @@ export class MockTransport {
           const names = namesCheck(m.names);
           if (names.err) return err(names.err, names.addr ? { addr: names.addr } : {});
           if (names.canonical) m.names = names.canonical; else delete m.names;
+          // map.c: heartbeat keys are tile addresses, each "on" or "off"
+          // (rev 0.48); "on" is the default and is no entry.
+          const hb = heartbeatCheck(m.heartbeat);
+          if (hb.err) return err(hb.err);
+          if (hb.canonical) m.heartbeat = hb.canonical; else delete m.heartbeat;
           // map.c's canonical emit: legends, then messages, then LED
           // actions, each in the order given; hex upper case, 000000 as
           // `off`, `fx` only when it is not solid and never on `map`, and a

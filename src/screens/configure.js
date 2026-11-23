@@ -12,6 +12,7 @@
 import { state, refreshMap, refreshTiles, setStatus, render as rerender } from '../app.js';
 import { geom, encoderNote, displayNote, stickNote, defaultDebounce, hasDebounce } from '../tilegeom.js';
 import { TILE_NAME_MAX, tileName, tileNameError, withTileName } from '../names.js';
+import { heartbeatOn, withHeartbeat } from '../heartbeat.js';
 import { axisOwner, ownerName, sideOwner, stickAt, stickCount, stickSummary, defaultDeadzone,
          withStickAxes, withoutStickAxes, withStickSide, withoutStickOutputs, withStickField,
          calStart, calFeed, calProgress, calReady, STICK_DEADZONE_MAX, STICK_AXIS_FULL } from '../stick.js';
@@ -302,6 +303,7 @@ async function pushMap(mutate, msg) {
   if (m.debounce && !Object.keys(m.debounce).length) delete m.debounce;
   if (m.disp && !Object.keys(m.disp).length) delete m.disp;
   if (m.names && !Object.keys(m.names).length) delete m.names;
+  if (m.heartbeat && !Object.keys(m.heartbeat).length) delete m.heartbeat;
   try {
     await state.client.mapSet(m);
     await refreshMap();
@@ -1405,6 +1407,11 @@ export function render(root) {
                value="${escAttr(tileName(state.map, t.addr))}" placeholder="e.g. P1 buttons">
         <span class="mono">saved with the board, ${TILE_NAME_MAX} characters</span>
       </label>
+      <label class="tilename muted" title="the small green light on the tile (§4.5)">
+        <input type="checkbox" data-hb ${heartbeatOn(state.map, t.addr) ? 'checked' : ''}>
+        Blink the tile's green status light
+        <span class="mono">off keeps it dark; tile firmware newer than 0.3.0</span>
+      </label>
       <p class="muted">${t.keys || t.enc
         ? `Click a key${t.enc ? ' or a knob' : ''}${stickCount(t) ? ' or the stick' : ''} to bind it${hasPanel(t) ? ', or the panel to write to it' : ''}. Controls are laid out as they sit on the tile; K1 is the K1 printed on the tile.`
         : 'This tile has no keys — its panel is the whole of it. Type into the rows and draw.'}</p>
@@ -1669,7 +1676,7 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger],[data-stick],[data-side],[data-push-btn],#stick-move,#stick-unbind,#stick-dz-reset,#cal-begin,#cal-start,#cal-done,#cal-cancel');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],[data-hb],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger],[data-stick],[data-side],[data-push-btn],#stick-move,#stick-unbind,#stick-dz-reset,#cal-begin,#cal-start,#cal-done,#cal-cancel');
     if (!el) return;
 
     // Any change of selection away from a stick being calibrated ends the
@@ -2143,6 +2150,18 @@ export function render(root) {
       const code = +el.dataset.rledDel;
       await pushMap(m => { m.rumble = withoutLedAction(m.rumble, code, btn ?? keyLed); },
         `Code ${code} no longer recolours ${keyName(btn)} (unsaved)`);
+      return render(root);
+    }
+
+    // §4.5 CFG_HB_OFF: the tile's green heartbeat LED. A main module from
+    // before rev 0.48 drops the section, which shows as the setting not
+    // coming back; a tile from before it ignores the bit and keeps blinking.
+    if (el.dataset.hb !== undefined) {
+      const on = el.checked;
+      await pushMap(m => adopt(m, withHeartbeat(m, t.addr, on)),
+        on ? `Tile ${t.addr}'s status light blinks (unsaved)` : `Tile ${t.addr}'s status light is off (unsaved)`);
+      if (heartbeatOn(state.map, t.addr) !== on)
+        setStatus('The main module did not keep it: its firmware is older than the status light switch. Update it from the Firmware page', 'fault');
       return render(root);
     }
 
