@@ -1410,7 +1410,7 @@ export function render(root) {
       <label class="tilename muted" title="the small green light on the tile (§4.5)">
         <input type="checkbox" data-hb ${heartbeatOn(state.map, t.addr) ? 'checked' : ''}>
         Blink the tile's green status light
-        <span class="mono">off keeps it dark; tile firmware newer than 0.3.0</span>
+        <span class="mono">off keeps it dark; tile firmware 0.3.1 or newer</span>
       </label>
       <p class="muted">${t.keys || t.enc
         ? `Click a key${t.enc ? ' or a knob' : ''}${stickCount(t) ? ' or the stick' : ''} to bind it${hasPanel(t) ? ', or the panel to write to it' : ''}. Controls are laid out as they sit on the tile; K1 is the K1 printed on the tile.`
