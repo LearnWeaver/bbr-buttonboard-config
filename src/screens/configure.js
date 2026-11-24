@@ -2046,7 +2046,7 @@ Continue?`)) return;
         state.hello = await state.client.hello();
         setStatus(`${MODES.find(m => m[0] === mode)[1]} chosen — Save, then unplug the board and plug it back in`, 'ok');
       } catch (e) {
-        setStatus(e.message === 'args' ? `This board's firmware has no ${MODES.find(m => m[0] === mode)[1]} mode yet: update it on Firmware first`
+        setStatus(e.message === 'args' ? `${MODES.find(m => m[0] === mode)[1]} needs firmware 0.4.0 or newer: update the board on Firmware first`
                                        : `USB: ${e.message}`, 'fault');
       }
       return render(root);

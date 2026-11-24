@@ -121,7 +121,7 @@ export function render(root) {
     } catch (e) {
       sel.value = state.hello.usbSaved;
       // a board that predates desk answers `usb desk` with args (§8.9)
-      setStatus((mode === 'desk' || mode === 'midi' || mode === 'sim') && e.message === 'args' ? `This board's firmware has no ${mode} mode yet: update it on Firmware first`
+      setStatus((mode === 'desk' || mode === 'midi' || mode === 'sim') && e.message === 'args' ? `The ${mode} mode needs firmware 0.4.0 or newer: update the board on Firmware first`
                                                       : `USB: ${e.message}`, 'fault');
     }
   };
