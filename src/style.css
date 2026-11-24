@@ -258,3 +258,9 @@ button.big:not(.primary):hover { border-color:var(--accent); color:var(--accent)
   background:#000; padding:3px; border-radius:3px; font:12px/1.25 ui-monospace, Menlo, monospace; }
 .mini-row { white-space:pre; padding:0 1px; }
 .mini-row.dbl { font-size:200%; line-height:1.2; }
+
+/* desk (§8.9): the rows of action chips under a key */
+.group + .group { margin-top: .35rem; }
+.hidrow { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; }
+.chord { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-top: .5rem; }
+.sim-num { font-size: 1.4rem; margin: .2rem 0; }

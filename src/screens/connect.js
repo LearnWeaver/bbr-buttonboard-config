@@ -16,6 +16,8 @@ Continue?`;
 
 const isMock = new URL(location.href).searchParams.get('mock') === '1';
 
+const USB_MODES = [['frc', 'FRC gamepad'], ['xinput', 'Xbox pad for FTC'], ['desk', 'keyboard and media keys'], ['midi', 'MIDI notes and controllers'], ['sim', 'sim joystick, 128 buttons']];
+
 const ICON_OK = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2"
   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>`;
 
@@ -61,12 +63,18 @@ function connected(h) {
       <div>
         <div class="insp-title">USB mode</div>
         <p class="muted small">What the board shows up as on the computer. <code>frc</code> is a plain gamepad plus this
-          config port; <code>xinput</code> is an Xbox 360 pad, which is what the FTC Driver Station wants.</p>
+          config port; <code>xinput</code> is an Xbox 360 pad, which is what the FTC Driver Station wants;
+          <code>desk</code> is a keyboard with media keys, for volume knobs, shortcuts and macro pads away from the
+          robot.</p>
         <p><select id="usb">
-          ${['frc', 'xinput'].map(m => `<option value="${m}" ${h.usbSaved === m ? 'selected' : ''}>${m}</option>`).join('')}
+          ${USB_MODES.map(([m, what]) => `<option value="${m}" ${h.usbSaved === m ? 'selected' : ''}>${m} · ${what}</option>`).join('')}
         </select></p>
         <p class="notice small"><strong>Choosing <code>xinput</code> disconnects this page.</strong>
-          To connect again, hold the CFG button while plugging the board in.</p>
+          To connect again, hold the CFG button while plugging the board in. <code>desk</code> keeps this page
+          working.</p>
+        ${h.usbSaved === 'desk' ? `<p class="notice small"><strong>Not for the Driver Station.</strong> In
+          <code>desk</code> the board is a keyboard: neither Driver Station reads one as a controller. Pick what
+          each button sends on Configure.</p>` : ''}
         ${'pixel' in h ? `
         <div class="insp-title">Status light</div>
         <p><label><input type="checkbox" id="pixel" ${h.pixel ? 'checked' : ''}>
@@ -107,8 +115,14 @@ export function render(root) {
     try {
       await state.client.usb(mode);
       state.hello = await state.client.hello();
-      setStatus(`USB mode ${mode} — Save, then unplug the board and plug it back in`, 'ok');
+      setStatus(mode === 'desk' ? 'USB mode desk — choose what each button sends on Configure, Save, then unplug and plug back in'
+                                : `USB mode ${mode} — Save, then unplug the board and plug it back in`, 'ok');
       render(root);
-    } catch (e) { setStatus(`USB: ${e.message}`, 'fault'); }
+    } catch (e) {
+      sel.value = state.hello.usbSaved;
+      // a board that predates desk answers `usb desk` with args (§8.9)
+      setStatus((mode === 'desk' || mode === 'midi' || mode === 'sim') && e.message === 'args' ? `This board's firmware has no ${mode} mode yet: update it on Firmware first`
+                                                      : `USB: ${e.message}`, 'fault');
+    }
   };
 }

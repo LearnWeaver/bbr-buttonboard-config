@@ -8,11 +8,15 @@
 import { state, setStatus } from '../app.js';
 import { geom } from '../tilegeom.js';
 import { XINPUT_SLOTS, padView } from '../xpad.js';
+import { actionOf, actionText } from '../desk.js';
+import { midiOf, midiText } from '../midi.js';
 
 export const wide = true;
 export const live = true;
 
-const label = (n) => state.hello?.usb === 'xinput' ? (XINPUT_SLOTS[n - 1] ?? 'no XInput slot') : `Button ${n}`;
+const label = (n) => state.hello?.usb === 'xinput' ? (XINPUT_SLOTS[n - 1] ?? 'no XInput slot')
+  : state.hello?.usb === 'desk' ? `Button ${n} · ${actionText(actionOf(state.map, n))}`
+  : state.hello?.usb === 'midi' ? `Button ${n} · ${midiText(midiOf(state.map, n))}` : `Button ${n}`;
 
 const VIEWS = ['Tiles', 'Counters', 'Power'];
 let view = 0, mode = 'off', held = 0, stats = null;
@@ -83,7 +87,13 @@ export async function render(root) {
 
     <div class="card">${body}</div>
 
-    <div class="card">
+    ${state.hello?.usb === 'desk' || state.hello?.usb === 'midi' ? `<div class="card">
+      <div class="card-head"><strong>Button test</strong><span class="mono muted">not in ${state.hello.usb}</span></div>
+      <p class="muted">${state.hello.usb === 'midi'
+        ? 'In <code>midi</code> mode each button is a note or a controller, so pressing all 32 at once would play every note together.'
+        : 'In <code>desk</code> mode each button is a key, a shortcut or a media key, so pressing all 32 at once would press Ctrl, Alt, Win+L and the rest together on this computer.'}
+        The board refuses the test in this mode. Press the keys on the tiles instead: <em>Pressed now</em> above shows them arriving.</p>
+    </div>` : `<div class="card">
       <div class="card-head">
         <strong>Button test</strong>
         <span class="mono muted">${mode === 'off' ? 'test off' : mode === 'hold' ? `test hold ${held}` : `test ${mode}`}</span>
@@ -111,7 +121,7 @@ export async function render(root) {
         title: n => `Hold button ${n} · ${XINPUT_SLOTS[n - 1]}` })}</div>
       <p class="notice small">The test stops as soon as this page disconnects, so no button can be left stuck on.
         It is never saved.</p>
-    </div>
+    </div>`}
 
     <p class="mono muted diag-foot">
       ${stats ? `uptime ${stats.uptime} s · poll cycle ${stats.pollCycleUs} µs` : 'counters unavailable'}

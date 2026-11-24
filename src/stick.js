@@ -16,7 +16,7 @@ export const STICK_DEADZONE_FRC = 8;
 export const STICK_DEADZONE_XINPUT = 0;
 export const STICK_DEADZONE_MAX = 50;
 
-export const AXES = [1, 2, 3, 4];                // ENC_AXIS_COUNT: encoders and sticks share them
+export const AXES = [1, 2, 3, 4, 5, 6, 7, 8];    // SIM_AXES (§8.11): encoders and sticks share them; frc reports 1-4
 export const SIDES = ['left', 'right'];
 
 // Axes come in pairs, 2i and 2i+1 (§17.2), so `axes` 2 is one stick.
@@ -57,7 +57,7 @@ export const sideOwner = (map, side) => (map?.stick ?? []).find(s => s.xinput ==
 // (§15.7). A stick entry with no output is allowed (§17.6), and is kept while
 // it carries anything of its own — a calibration, an invert, a deadzone — so
 // choosing those before choosing an output is not undone by the next push.
-const encLive = (e) => e.axis || e.cw || e.ccw || e.trigger;
+const encLive = (e) => e.axis || e.cw || e.ccw || e.trigger || e.midi;
 const stickLive = (s) => s.x || s.xinput || s.cal || s.invertX || s.invertY || s.deadzone != null;
 
 function tidy(map) {

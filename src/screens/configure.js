@@ -21,6 +21,10 @@ import { RUMBLE_CODE_MAX, bindFor, bindsOf, withBind, withoutBind,
          textsOf, textFor, withText, withoutText, RUMBLE_TEXT_MAX,
          showLegendCall, rawRumbleCall, wireByte, sendValue } from '../rumble.js';
 import { XINPUT_SLOTS, padView, tinySlot } from '../xpad.js';
+import { MEDIA, MOUSE, actionOf, actionText, withAction, canonical, chordOf, isModifierCode, modsOf,
+         CHORD_MODS, KEY_GROUPS, chordParts, chordFrom } from '../desk.js';
+import { simLayout, simKeyButton, simEncButton, hatDirOf, isToggle, withHatDir, withToggle, HAT_DIRS } from '../sim.js';
+import { KINDS as MIDI_KINDS, parseMidi, formatMidi, canonicalMidi, midiText, midiOf, withMidi, noteName } from '../midi.js';
 import { attrByte, cssOf, isColor, ascii, unrepresentable, NAMES, CAP_DISP_COLOR, inkPaperOf,
          ditherTo1bpp, imageChunks, strideOf, paint1bpp,
          encodeRgb565, paintRgb565, slotChunks, slotCrc, SLOT_CHUNK } from '../dispattr.js';
@@ -47,7 +51,9 @@ const pickerOf = (attr, cur, disabled = '') => {
       <input type="color" ${attr} value="#${custom ? cur : 'ffffff'}" ${disabled}></label>`;
 };
 const FX = ['solid', 'blink', 'fast', 'breathe'];
-const AXES = [1, 2, 3, 4];                       // ENC_AXIS_COUNT, §15.5; sticks share them (§17.4)
+// The axes the chosen mode reports: four under frc (§15.5), eight under sim
+// (§8.11). Encoders and sticks share them (§17.4).
+const axesFor = () => viewMode() === 'sim' ? [1, 2, 3, 4, 5, 6, 7, 8] : [1, 2, 3, 4];
 // Axis counts per click (§15.4). The FRC Driver Station sends each axis to
 // the robot as 8 bits, so 256 is one robot-visible step per click; smaller
 // values need several clicks per step, larger ones reach the end sooner.
@@ -99,7 +105,222 @@ export function focusTile(addr, kind = 'disp', idx = 0) {
 const ARM_TIMEOUT_MS = 30000;
 
 const btnLabel = (n) =>
-  state.hello?.usb === 'xinput' ? (XINPUT_SLOTS[n - 1] ?? `${n} — no XInput slot`) : `Button ${n}`;
+  viewMode() === 'xinput' ? (XINPUT_SLOTS[n - 1] ?? `${n} — no XInput slot`)
+  : viewMode() === 'desk' ? `Button ${n} · ${actionText(actionOf(state.map, n))}`
+  : viewMode() === 'midi' ? `Button ${n} · ${midiText(midiOf(state.map, n))}` : `Button ${n}`;
+
+// ---- sim, §8.11 ---------------------------------------------------------------
+//
+// No choosing numbers: every key is its own button, numbered tile by tile, and
+// the game binds them. The inspector shows the number and offers the two
+// things the map does say: toggles and the hat.
+function simView(t) {
+  const L = simLayout(state.tiles);
+  const btn = simKeyButton(L, t.addr, sel.idx);
+  const dir = hatDirOf(state.map, btn), tog = isToggle(state.map, btn);
+  const label = { up: 'Up', right: 'Right', down: 'Down', left: 'Left' };
+  if (!btn) return `<div>
+      <div class="insp-title">Sim button</div>
+      <p class="muted small">This key has no number: the panel already has 128 buttons before it. Move this tile to
+        a lower address, or take keys off the panel.</p>
+    </div>`;
+  return `<div>
+      <div class="insp-title">Sim button</div>
+      <p class="sim-num"><strong>Button ${btn}</strong></p>
+      <p class="muted small">Every key is its own button, numbered tile by tile in address order. Bind it in the
+        game. Unplugging a tile keeps everyone's numbers; add new tiles at the end.</p>
+      <p><label><input type="checkbox" id="sim-toggle" ${tog ? 'checked' : ''}> Toggle: each press switches it on or
+        off, for gear, lights or a master arm</label></p>
+      <div class="insp-title">Hat</div>
+      <div class="group">
+        <button class="chip ${!dir ? 'sel' : ''}" data-sim-hat="">Not on the hat</button>
+        ${HAT_DIRS.map(d => {
+          const owner = (state.map?.sim?.hat ?? [])[HAT_DIRS.indexOf(d)];
+          return `<button class="chip ${dir === d ? 'sel' : ''} ${owner && owner !== btn ? 'taken' : ''}" data-sim-hat="${d}"
+            title="${owner && owner !== btn ? `now button ${owner}` : `hat ${d}`}">${label[d]}</button>`;
+        }).join('')}
+      </div>
+      <p class="muted small">Four keys make a hat switch, which flight sims use to look around: two together give a
+        diagonal. A key on the hat stops being a button.</p>
+    </div>`;
+}
+
+// ---- desk, §8.9 --------------------------------------------------------------
+//
+// What a button sends when the board is a keyboard. Shown when the board is in
+// desk or is switching to it, since that is when the choice means something;
+// the map keeps it either way, so a board moved between modes keeps its keys.
+// The media keys worth a chip of their own; the rest are in the text box.
+const MEDIA_CHIPS = ['vol_up', 'vol_down', 'mute', 'play_pause', 'prev', 'next', 'bright_up', 'bright_down'];
+const MOUSE_CHIPS = ['click_left', 'click_right', 'click_middle', 'scroll_up', 'scroll_down'];
+const F_KEYS = Array.from({ length: 12 }, (_, i) => `f${i + 13}`);
+// Recording a shortcut from this computer's keyboard: the button it is for,
+// and the modifiers seen so far, so Ctrl alone can be recorded on its release.
+let recording = null;        // { btn, mods: Set }
+
+function stopRecording() {
+  if (!recording) return;
+  document.removeEventListener('keydown', recording.down, true);
+  document.removeEventListener('keyup', recording.up, true);
+  recording = null;
+}
+
+// Buttons nothing uses yet: no key, no encoder direction, no desk action.
+function freeButtons(count) {
+  const used = new Set([...(state.map?.bind ?? []).map(b => b.btn),
+                        ...(state.map?.enc ?? []).flatMap(e => [e.cw, e.ccw]).filter(Boolean),
+                        ...Object.keys(state.map?.hid ?? {}).map(Number)]);
+  const out = [];
+  for (let n = 32; n >= 1 && out.length < count; n--) if (!used.has(n)) out.push(n);   // from the top, out of the way
+  return out;
+}
+
+// A shortcut by clicking: modifier toggles and a key list. Starts from the
+// button's shortcut when it has one, so Ctrl+C becomes Ctrl+Shift+C with one click.
+function chordBuilder(act) {
+  const parts = chordParts(act) ?? { mods: [], key: '' };
+  return `<div class="chord">
+      <span class="muted small">Shortcut</span>
+      ${CHORD_MODS.map(([m, label]) =>
+        `<button class="chip ${parts.mods.includes(m) ? 'sel' : ''}" data-chord-mod="${m}" aria-pressed="${parts.mods.includes(m)}">${label}</button>`).join('')}
+      <span class="muted">+</span>
+      <select id="chord-key" title="the key">
+        <option value="">no key</option>
+        ${KEY_GROUPS.map(([g, keys]) => `<optgroup label="${g}">${keys.map(([k, label]) =>
+          `<option value="${k}" ${parts.key === k ? 'selected' : ''}>${esc(label)}</option>`).join('')}</optgroup>`).join('')}
+      </select>
+    </div>`;
+}
+
+// The selected key's desk action, '' when it has no button or the button sends nothing.
+const deskActionAt = (addr, key) => { const b = bindingAt(addr, key); return b ? actionOf(state.map, b) : ''; };
+
+// Give the selected key `action`. A key with no button number gets a spare one
+// first, so a keyboard key never needs the number picked by hand.
+async function setDeskAction(addr, key, action) {
+  let btn = bindingAt(addr, key);
+  const fresh = !btn;
+  if (fresh) btn = freeButtons(1)[0];
+  if (!btn) return setStatus('All 32 button numbers are in use: free one first', 'fault');
+  const what = action ? `sends ${actionText(action)}` : 'sends nothing';
+  await pushMap(m => {
+    if (fresh) m.bind.push({ btn, addr, key });
+    adopt(m, withAction(m, btn, action));
+  }, `${fresh ? `This key is now button ${btn} and ` : `Button ${btn} `}${what} in desk (unsaved)`);
+}
+
+// ---- midi, §8.10 --------------------------------------------------------------
+//
+// Learn: the module reports every message the computer sends it (ev midi), so
+// "play the note in your program" binds a key the way a rumble code binds a
+// legend: armed here, and the first Note or CC that arrives is taken.
+let midiLearn = null;          // { addr, key, timer } while waiting
+let lastMidiIn = null;         // { data, at }
+
+async function setMidiAction(addr, key, action) {
+  let btn = bindingAt(addr, key);
+  const fresh = !btn;
+  if (fresh) btn = freeButtons(1)[0];
+  if (!btn) return setStatus('All 32 button numbers are in use: free one first', 'fault');
+  await pushMap(m => {
+    if (fresh) m.bind.push({ btn, addr, key });
+    adopt(m, withMidi(m, btn, action));
+  }, `${fresh ? `This key is now button ${btn} and ` : `Button ${btn} `}${action ? `sends ${midiText(action)}` : 'sends nothing'} in MIDI (unsaved)`);
+}
+
+function midiView(btn, others) {
+  const act = midiOf(state.map, btn);
+  const a = parseMidi(act) ?? { kind: 'none' };
+  const kind = a.kind === 'none' ? 'note' : a.kind;
+  const num = a.kind === 'none' ? 60 : a.num, ch = a.ch ?? 1;
+  return `<div>
+      <div class="insp-title">Sends</div>
+      <p><strong>${esc(midiText(act))}</strong>${act ? ` <span class="mono muted">${esc(act)}</span>` : ''}</p>
+      ${btn ? '' : '<p class="muted small">Pick anything below: the key gets a spare button number by itself.</p>'}
+      <div class="group">${MIDI_KINDS.map(([k, label]) =>
+        `<button class="chip ${a.kind === k ? 'sel' : ''}" data-midi-kind="${k}">${label}</button>`).join('')}</div>
+      <p class="hidrow">
+        <label>${kind === 'note' ? 'Note' : kind === 'cc' ? 'Controller' : 'Program'}
+          <input type="number" id="midi-num" min="0" max="127" step="1" value="${num}" style="width:5em"></label>
+        ${kind === 'note' ? `<span class="mono muted">${noteName(num)}</span>` : ''}
+        <label>Channel <select id="midi-ch">${Array.from({ length: 16 }, (_, i) =>
+          `<option value="${i + 1}" ${ch === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>
+      </p>
+      <p class="hidrow">
+        <button id="midi-learn" class="${midiLearn ? 'primary' : ''}">${midiLearn ? 'Waiting for a note or CC… (click to stop)' : 'Learn from the computer…'}</button>
+        ${act ? '<button data-midi-clear>Clear</button>' : ''}
+      </p>
+      <p class="muted small">${kind === 'note'
+        ? 'Note On while held, Note Off when let go, velocity 127. 60 is middle C: most programs call it C4, Ableton and FL Studio C3.'
+        : kind === 'cc' ? 'Value 127 while held, 0 when let go: CC 64 is a sustain pedal.'
+                        : 'Sent once on each press: switches the program or scene.'}
+        When the computer sends this ${kind === 'pc' ? 'key nothing: a program change has no light.' : 'same note or CC back, the key lights in its colour (white if it has none) and goes dark on 0.'}
+        Learn takes the next note or CC the computer sends: in your program, light this pad or move the control.</p>
+      ${others.length ? `<p class="muted small">This key also presses ${others.map(n => `button ${n}`).join(' and ')},
+        and each sends its own.</p>` : ''}
+    </div>`;
+}
+
+function onMidi(e) {
+  lastMidiIn = { data: e.data, at: Date.now() };
+  if (!midiLearn) return;
+  const b = (e.data ?? '').match(/../g)?.map(h => parseInt(h, 16)) ?? [];
+  const type = b[0] & 0xF0, ch = (b[0] & 0x0F) + 1;
+  if (type !== 0x90 && type !== 0x80 && type !== 0xB0) return;     // learn notes and CCs only
+  const { addr, key } = midiLearn;
+  clearTimeout(midiLearn.timer);
+  midiLearn = null;
+  setMidiAction(addr, key, formatMidi({ kind: type === 0xB0 ? 'cc' : 'note', num: b[1], ch }))
+    .then(() => { if (state.screen === 'configure') rerenderKeepingScroll(); });
+}
+
+function deskView(btn, others) {
+  const act = actionOf(state.map, btn);
+  const chip = (v, label) => `<button class="chip ${act === v ? 'sel' : ''}" data-hid="${v}">${label}</button>`;
+  return `<div>
+      <div class="insp-title">Sends</div>
+      ${btn ? '' : '<p class="muted small">Pick anything below: the key gets a spare button number by itself.</p>'}
+      <p><strong>${esc(actionText(act))}</strong>${act ? ` <span class="mono muted">${esc(act)}</span>` : ''}</p>
+      <div class="group">${MEDIA_CHIPS.map(n => chip(n, MEDIA.find(m => m[0] === n)[2])).join('')}</div>
+      <div class="group">${F_KEYS.map(f => chip(f, f.toUpperCase())).join('')}</div>
+      <div class="group">${MOUSE_CHIPS.map(n => chip(n, MOUSE.find(m => m[0] === n)[1])).join('')}</div>
+      ${chordBuilder(act)}
+      <p class="hidrow">
+        <button id="hid-rec" class="${recording ? 'primary' : ''}">${recording ? 'Press the shortcut now… (Esc cancels)' : 'Record a shortcut…'}</button>
+        <input id="hid-text" class="mono" size="18" placeholder="ctrl+shift+m" value="${escAttr(act)}" title="a shortcut, a key or a media key">
+        ${act ? '<button data-hid="">Clear</button>' : ''}
+      </p>
+      <p class="muted small">Held while the key is held, like a key on a keyboard. F13–F24 are keys no keyboard
+        has, so apps such as OBS can use them without clashing with anything. Build a shortcut with the toggles and
+        the key list (Cmd / Win + Tab for the app switcher), record it from this keyboard, or type it in the box.
+        Shortcuts the computer keeps for itself, like ⌘Tab or Ctrl+W, cannot be recorded: click them instead.</p>
+      ${others.length ? `<p class="muted small">This key also presses ${others.map(n => `button ${n}`).join(' and ')},
+        and each sends its own action.</p>` : ''}
+    </div>`;
+}
+
+// ---- which options the inspector shows ---------------------------------------
+//
+// The board's chosen USB mode (§8.3): what it reports as now, or what it will
+// after Save and a replug. Each mode shows only its own way of choosing what a
+// key sends: FRC the 32 numbers, FTC the Xbox pad, desk the keys and media.
+const MODES = [['frc', 'FRC gamepad'], ['xinput', 'FTC (Xbox pad)'], ['desk', 'Keyboard & media'], ['midi', 'MIDI'],
+               ['sim', 'Sim (128 buttons)']];
+const viewMode = () => {
+  const m = state.hello?.usbSaved ?? state.hello?.usb ?? 'frc';
+  return m === 'config' ? 'frc' : m;
+};
+
+function modeBar() {
+  const m = viewMode(), live = state.hello?.usb;
+  return `<div>
+      <div class="insp-title">Mode</div>
+      <div class="group">${MODES.map(([v, label]) =>
+        `<button class="chip ${m === v ? 'sel' : ''}" data-mode="${v}" aria-pressed="${m === v}">${label}</button>`).join('')}</div>
+      ${live && live !== 'config' && live !== m ? `<p class="muted small">The board still reports as <code>${live}</code>:
+        Save, then unplug it and plug it back in.</p>` : ''}
+    </div>`;
+}
 
 // A key may feed several buttons at once, a combo (§9.7): Start+A on one key
 // is how an FTC pad is bound to gamepad 1. buttonsAt lists them in order;
@@ -126,7 +347,11 @@ async function endCal() {
   try { await state.client.stickCalCancel(); } catch { /* the board drops it on close anyway */ }
 }
 // Called by app.js when another screen is shown.
-export function leave() { return endCal(); }
+export function leave() {
+  stopRecording();
+  if (midiLearn) { clearTimeout(midiLearn.timer); midiLearn = null; }
+  return endCal();
+}
 
 // What this page last put in the boxes for each panel, keyed by address.
 //
@@ -296,7 +521,7 @@ async function pushMap(mutate, msg) {
   m.bind = m.bind ?? [];
   mutate(m);
   // §15.7: an entry with neither axis nor cw/ccw binds the encoder to nothing.
-  m.enc = (m.enc ?? []).filter(e => e.axis || e.cw || e.ccw || e.trigger);
+  m.enc = (m.enc ?? []).filter(e => e.axis || e.cw || e.ccw || e.trigger || e.midi);
   if (!m.enc.length) delete m.enc;
   if (m.stick && !m.stick.length) delete m.stick;
   if (!(m.rumble ?? []).length) delete m.rumble;
@@ -304,6 +529,7 @@ async function pushMap(mutate, msg) {
   if (m.disp && !Object.keys(m.disp).length) delete m.disp;
   if (m.names && !Object.keys(m.names).length) delete m.names;
   if (m.heartbeat && !Object.keys(m.heartbeat).length) delete m.heartbeat;
+  if (m.hid && !Object.keys(m.hid).length) delete m.hid;
   try {
     await state.client.mapSet(m);
     await refreshMap();
@@ -552,6 +778,7 @@ function subscribe() {
   subscribedTo = state.client;
   state.client.on('rumble', onRumble);
   state.client.on('player', onPlayer);
+  state.client.on('midi', onMidi);
 }
 
 const ago = (at) => {
@@ -626,35 +853,36 @@ function inspectKey(t) {
   const ledOf = (btn) => (btn && led.btn?.[btn]) || {};
   const own = ownLed(t.addr, sel.idx);
   const hasLed = (t.leds ?? 0) > sel.idx;
-  const xinput = state.hello?.usb === 'xinput';
+  const mode = viewMode();
   return `
+    ${modeBar()}
     <div>
       <div class="insp-title">Selected key</div>
       <div class="insp-head"><strong>K${sel.idx + 1}</strong> <span class="mono muted">tile ${t.addr}</span></div>
     </div>
 
-    <div>
+    ${mode === 'sim' ? simView(t) : mode === 'midi' ? midiView(cur, btns.slice(1)) : mode === 'desk' ? deskView(cur, btns.slice(1)) : `<div>
       <div class="insp-title">Reports as</div>
-      <div class="btngrid">
-        ${Array.from({ length: 32 }, (_, i) => i + 1).map(n =>
-          `<button class="btncell ${btns.includes(n) ? 'sel' : ''} ${sourcesOf(n).length ? 'used' : ''} ${xinput && n > XINPUT_SLOTS.length ? 'noslot' : ''}"
-                   data-btn="${n}" title="${btnLabel(n)}">${n}<small>${tinySlot(n) ?? '&nbsp;'}</small></button>`).join('')}
-      </div>
-      ${padView({ attr: 'btn',
+      ${mode === 'xinput' ? padView({ attr: 'btn',
         cls: n => `${btns.includes(n) ? 'sel' : ''} ${sourcesOf(n).length ? 'used' : ''}`,
-        title: n => `Button ${n} · ${XINPUT_SLOTS[n - 1]}` })}
-      <p class="muted small">The same 24 buttons where an Xbox pad has them: click either view.
-        ${xinput ? 'Buttons 25–32 have no XInput slot, so this board does not send them.'
-                 : 'Under <code>frc</code> the numbers are what the robot sees; the pad names what each becomes under <code>xinput</code>.'}</p>
-      <p class="muted small">${cur ? btns.map(btnLabel).join(' + ') : 'Not bound. Pick a number, or press the key on the board.'}</p>
+        title: n => `Button ${n} · ${XINPUT_SLOTS[n - 1]}` }) : `<div class="btngrid">
+        ${Array.from({ length: 32 }, (_, i) => i + 1).map(n =>
+          `<button class="btncell ${btns.includes(n) ? 'sel' : ''} ${sourcesOf(n).length ? 'used' : ''}"
+                   data-btn="${n}" title="${btnLabel(n)}">${n}</button>`).join('')}
+      </div>`}
+      <p class="muted small">${mode === 'xinput'
+        ? 'Click where the button is on an Xbox pad. That is what the FTC Driver Station sees.'
+        : 'The number is what the robot reads: Button 1 to 32 on the FRC Driver Station.'}</p>
+      <p class="muted small">${cur ? btns.map(btnLabel).join(' + ') : `Not bound. Pick ${mode === 'xinput' ? 'a button on the pad' : 'a number'}, or press the key on the board.`}</p>
       <div class="group" style="margin-top:.4rem">
         <button class="chip ${comboMode ? 'sel' : ''}" id="combo" title="click numbers to add or remove them">Combo</button>
-        ${FTC_COMBOS.map(c => `<button class="chip ${same(btns, c.btns) ? 'sel' : ''}" data-combo="${c.btns.join('+')}"
+        ${mode !== 'xinput' ? '' : FTC_COMBOS.map(c => `<button class="chip ${same(btns, c.btns) ? 'sel' : ''}" data-combo="${c.btns.join('+')}"
                  title="${c.note}: buttons ${c.btns.join(' + ')}">${c.label}</button>`).join('')}
       </div>
       <p class="muted small">${comboMode
         ? 'Combo is on: each number you click is added to this key or taken off it. One press sends them all together.'
-        : 'Combo presses several buttons from one key. Start+A and Start+B are how the FTC Driver Station assigns gamepad 1 and 2.'}</p>
+        : mode === 'xinput' ? 'Combo presses several buttons from one key. Start+A and Start+B are how the FTC Driver Station assigns gamepad 1 and 2.'
+                            : 'Combo presses several buttons from one key.'}</p>
       <button id="press">Press a key…</button>
       <p class="notice small">While the board is waiting for that press it reports every button released, so
         nothing on the robot can fire.</p>
@@ -672,7 +900,7 @@ function inspectKey(t) {
           : '<span class="muted small">Bind this key first.</span>'}
       </div>
       ${cur ? '<p class="muted small">The button is pressed while any of these keys is down.</p>' : ''}
-    </div>`}
+    </div>`}`}
 
     <div>
       <div class="insp-title">LED</div>
@@ -682,10 +910,10 @@ function inspectKey(t) {
       : hasLed ? `
       ${ledPicker(own)}
       <p class="muted small">This key has no button, so the colour is the key's own: it stays lit with or without a
-        keycap, which makes the key an indicator light. Give it a robot colour below to change it during a match.</p>`
+        keycap, which makes the key an indicator light.${mode === 'xinput' ? ' Give it a robot colour below to change it during a match.' : ''}</p>`
       : '<p class="muted small">This tile has no LED under its keys.</p>'}
     </div>
-    ${cur ? robotColour(t, cur) : hasLed ? robotColour(t, null) : ''}`;
+    ${mode !== 'xinput' ? '' : cur ? robotColour(t, cur) : hasLed ? robotColour(t, null) : ''}`;
 }
 
 // Colour swatches and effects for one LED's default. An effect needs a
@@ -1109,7 +1337,7 @@ function pressInvertView(t) {
 function inspectEnc(t) {
   const e = encAt(t.addr, sel.idx) ?? {};
   const pos = t.encPos?.[sel.idx];
-  const xinput = state.hello?.usb === 'xinput';
+  const mode = viewMode(), xinput = mode === 'xinput';
   const pulsed = !e.axis && (e.cw || e.ccw);
 
   const pick = (which) => `<select data-dir="${which}">
@@ -1119,18 +1347,19 @@ function inspectEnc(t) {
     </select>`;
 
   return `
+    ${modeBar()}
     <div>
       <div class="insp-title">Selected encoder</div>
       <div class="insp-head"><strong>ENC${sel.idx + 1}</strong> <span class="mono muted">tile ${t.addr}</span></div>
       <p class="muted small">Position <span class="mono">${pos ?? '—'}</span>
-        <button id="zero" ${e.axis ? '' : 'disabled'}>Zero</button></p>
+        ${mode === 'frc' ? `<button id="zero" ${e.axis ? '' : 'disabled'}>Zero</button>` : ''}</p>
     </div>
 
-    <div>
+    ${mode !== 'frc' && mode !== 'sim' ? '' : `    <div>
       <div class="insp-title">Axis</div>
       <div class="group">
         <button class="chip ${!e.axis ? 'sel' : ''}" data-axis="0">none</button>
-        ${AXES.map(a => {
+        ${axesFor().map(a => {
           const owner = ownerOf(a);
           const mine = encOwns(owner, t.addr, sel.idx);
           const taken = owner && !mine;
@@ -1149,9 +1378,16 @@ function inspectEnc(t) {
         8 bits, so at 256 every click is one step the robot sees; below 256 it takes several clicks per step.
         Changing it zeroes the position.</p>
       <button id="turn">Turn the knob…</button>
-    </div>
+    </div>`}
 
-    <div>
+    ${mode === 'sim' ? (() => {
+      const L = simLayout(state.tiles), cw = simEncButton(L, t.addr, sel.idx, false), ccw = simEncButton(L, t.addr, sel.idx, true);
+      return `<div>
+      <div class="insp-title">Turns</div>
+      <p class="muted small">${e.axis ? `This knob moves axis ${e.axis}, so its turns press nothing. Pick <em>none</em> above to make it a rotary.`
+        : cw ? `Each click clockwise presses <strong>button ${cw}</strong>, anticlockwise <strong>button ${ccw}</strong>: bind them in the game as a rotary (radio tuning, trim).`
+             : 'Its turns have no number: the panel already has 128 buttons before them.'}</p>
+    </div>`; })() : `    <div>
       <div class="insp-title">Direction buttons</div>
       <div class="dirpick"><span class="muted small">clockwise</span> ${pick('cw')}</div>
       <div class="dirpick"><span class="muted small">anticlockwise</span> ${pick('ccw')}</div>
@@ -1161,10 +1397,39 @@ function inspectEnc(t) {
           ? 'With no axis, this knob sends a short button press for each click in <code>frc</code> too.'
           : 'Optional under <code>frc</code>, where the axis is used instead. Set them anyway and the same setup works in both modes.'}</p>
       ${e.axis && (e.cw || e.ccw) ? '<p class="muted small">Both set: the axis is used here, the buttons under <code>xinput</code>.</p>' : ''}
-    </div>
+    </div>`}
 
-    <div>
-      <div class="insp-title">Trigger (xinput)</div>
+    ${mode === 'desk' ? `<div>
+      <div class="insp-title">Knob</div>
+      <p class="muted small">${e.cw || e.ccw
+        ? `Clockwise sends <strong>${esc(actionText(actionOf(state.map, e.cw)))}</strong>, anticlockwise
+           <strong>${esc(actionText(actionOf(state.map, e.ccw)))}</strong>, once per click.`
+        : 'In <code>desk</code> a knob sends one press of a direction button per click.'}</p>
+      <div class="group">
+        <button class="chip" data-knob="vol_up,vol_down">Volume knob</button>
+        <button class="chip" data-knob="scroll_up,scroll_down">Scroll wheel</button>
+        <button class="chip" data-knob="bright_up,bright_down">Brightness</button>
+        <button class="chip" data-knob="next,prev">Next / previous track</button>
+      </div>
+      <p class="muted small">Sets both directions in one go, using spare button numbers when the knob has none.</p>
+    </div>` : ''}
+
+    ${mode !== 'midi' ? '' : (() => {
+      const a = parseMidi(e.midi ?? '') ?? { kind: 'none' };
+      return `<div>
+      <div class="insp-title">Knob</div>
+      <p class="hidrow"><label><input type="checkbox" id="enc-midi-on" ${a.kind === 'cc' ? 'checked' : ''}> Send a controller</label>
+        ${a.kind === 'cc' ? `<label>CC <input type="number" id="enc-midi-num" min="0" max="127" value="${a.num}" style="width:5em"></label>
+        <label>Channel <select id="enc-midi-ch">${Array.from({ length: 16 }, (_, i) =>
+          `<option value="${i + 1}" ${a.ch === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select></label>` : ''}</p>
+      <p class="muted small">Each click sends the controller as a relative value, 64 plus the clicks since the
+        last message: set the control in your program to <strong>Relative (64)</strong>, which some call
+        <em>Relative 2</em> or <em>binary offset</em>. Without one, the knob presses its direction buttons, each
+        sending its own note.</p>
+    </div>`; })()}
+
+    ${mode !== 'xinput' ? '' : `    <div>
+      <div class="insp-title">Trigger</div>
       <div class="group">
         ${[['', 'none'], ['lt', 'LT'], ['rt', 'RT']].map(([v, name]) => {
           const owner = v && (state.map?.enc ?? []).find(x => x.trigger === v && !(x.addr === t.addr && x.idx === sel.idx));
@@ -1176,7 +1441,7 @@ function inspectEnc(t) {
         each click moves the trigger by one step, wrapping at 256. Robot code reads it with the
         <code>TriggerKnob</code> class: <code>knob.update(gamepad1.${e.trigger === 'rt' ? 'right' : 'left'}_trigger)</code>
         gives the running count. That trigger then stops working as button ${e.trigger === 'rt' ? 16 : 15}.</p>
-    </div>`;
+    </div>`}`;
 }
 
 // ---- sticks, §17 ------------------------------------------------------------
@@ -1227,7 +1492,7 @@ function inspectStick(t) {
   const click = s.xinput === 'right' ? 10 : 9;       // R3 / L3, §8.5
   const axisSel = (which) => `<select data-stick-axis="${which}">
       <option value="">—</option>
-      ${AXES.map(a => {
+      ${axesFor().map(a => {
         const o = ownerOf(a);
         const mine = o?.kind === 'stick' && o.addr === t.addr && o.idx === sel.idx;
         return `<option value="${a}" ${s[which] === a ? 'selected' : ''}>${a}${o && !mine ? ` · now ${ownerName(o)}` : ''}</option>`;
@@ -1494,6 +1759,52 @@ export function render(root) {
     // §9.5 rev 0.44: a tile's name lives in the map, so it goes wherever the
     // board goes. A main module from before names drops the section without
     // an error, which is only visible as the name not coming back.
+    if (el.id === 'sim-toggle') {
+      const t0 = selectedTile(), btn = t0 && simKeyButton(simLayout(state.tiles), t0.addr, sel.idx);
+      if (!btn) return;
+      await pushMap(m => adopt(m, withToggle(m, btn, el.checked)), `Button ${btn} ${el.checked ? 'is a toggle' : 'is a plain button'} (unsaved)`);
+      return render(root);
+    }
+    if (el.id === 'midi-num' || el.id === 'midi-ch') {
+      const t0 = selectedTile();
+      if (!t0) return;
+      const a = parseMidi(midiOf(state.map, bindingAt(t0.addr, sel.idx))) ?? { kind: 'none' };
+      const num = Math.max(0, Math.min(127, Math.round(+(root.querySelector('#midi-num')?.value ?? 60)) || 0));
+      const ch = +(root.querySelector('#midi-ch')?.value ?? 1);
+      await setMidiAction(t0.addr, sel.idx, formatMidi({ kind: a.kind === 'none' ? 'note' : a.kind, num, ch }));
+      return render(root);
+    }
+    if (el.id === 'enc-midi-on' || el.id === 'enc-midi-num' || el.id === 'enc-midi-ch') {
+      const t0 = selectedTile();
+      if (!t0) return;
+      const on = root.querySelector('#enc-midi-on')?.checked;
+      const num = Math.max(0, Math.min(127, Math.round(+(root.querySelector('#enc-midi-num')?.value ?? 1)) || 0));
+      const ch = +(root.querySelector('#enc-midi-ch')?.value ?? 1);
+      const v = on ? formatMidi({ kind: 'cc', num: el.id === 'enc-midi-on' && !root.querySelector('#enc-midi-num') ? 1 : num, ch }) : '';
+      await pushMap(m => {
+        m.enc = m.enc ?? [];
+        let e1 = m.enc.find(x => x.addr === t0.addr && x.idx === sel.idx);
+        if (!e1) { e1 = { addr: t0.addr, idx: sel.idx }; m.enc.push(e1); }
+        if (v) e1.midi = v; else delete e1.midi;
+      }, v ? `ENC${sel.idx + 1} sends ${midiText(v)} as relative values (unsaved)` : `ENC${sel.idx + 1} sends no controller (unsaved)`);
+      return render(root);
+    }
+    if (el.id === 'chord-key') {
+      const t0 = selectedTile();
+      if (!t0) return;
+      const p = chordParts(deskActionAt(t0.addr, sel.idx)) ?? { mods: [], key: '' };
+      await setDeskAction(t0.addr, sel.idx, chordFrom(p.mods, el.value));
+      return render(root);
+    }
+    if (el.id === 'hid-text') {
+      const t0 = selectedTile();
+      if (!t0) return;
+      const c = canonical(el.value.trim());
+      if (c === null) { setStatus(`"${el.value.trim()}" is not a key, a shortcut or a media key — try ctrl+shift+m, f13 or vol_up`, 'fault'); return; }
+      if (!c && !bindingAt(t0.addr, sel.idx)) return;
+      await setDeskAction(t0.addr, sel.idx, c);
+      return render(root);
+    }
     if (el.id === 'tile-name') {
       const n = el.value.trim();
       const why = tileNameError(n);
@@ -1676,13 +1987,125 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],[data-hb],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger],[data-stick],[data-side],[data-push-btn],#stick-move,#stick-unbind,#stick-dz-reset,#cal-begin,#cal-start,#cal-done,#cal-cancel');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],[data-hb],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger],[data-stick],[data-side],[data-push-btn],#stick-move,#stick-unbind,#stick-dz-reset,#cal-begin,#cal-start,#cal-done,#cal-cancel,[data-hid],#hid-rec,[data-knob],[data-chord-mod],[data-mode],[data-midi-kind],#midi-learn,[data-midi-clear],[data-sim-hat]');
     if (!el) return;
+    if (recording && el.id !== 'hid-rec') stopRecording();
 
     // Any change of selection away from a stick being calibrated ends the
     // calibration first, since the board reports that stick centred until then.
     if (calRun && (el.dataset.tile || el.dataset.key || el.dataset.enc || el.dataset.dispSel ||
         (el.dataset.stick && +el.dataset.stick !== calRun.idx))) await endCal();
+
+    // §8.11: the hat, by the key's sim button
+    if (el.dataset.simHat !== undefined) {
+      const btn = simKeyButton(simLayout(state.tiles), t.addr, sel.idx);
+      if (!btn) return;
+      const dir = el.dataset.simHat || null;
+      await pushMap(m => adopt(m, withHatDir(m, btn, dir)), dir ? `Button ${btn} is hat ${dir} (unsaved)` : `Button ${btn} is off the hat (unsaved)`);
+      return render(root);
+    }
+    // §8.10: what a key sends under midi
+    if (el.dataset.midiKind) {
+      const a = parseMidi(midiOf(state.map, bindingAt(t.addr, sel.idx))) ?? { kind: 'none' };
+      const num = a.kind === 'none' ? 60 : a.num;
+      await setMidiAction(t.addr, sel.idx, formatMidi({ kind: el.dataset.midiKind, num, ch: a.ch ?? 1 }));
+      return render(root);
+    }
+    if (el.dataset.midiClear !== undefined) {
+      if (bindingAt(t.addr, sel.idx)) await setMidiAction(t.addr, sel.idx, '');
+      return render(root);
+    }
+    if (el.id === 'midi-learn') {
+      if (midiLearn) { clearTimeout(midiLearn.timer); midiLearn = null; setStatus('Learn stopped', 'ok'); return render(root); }
+      midiLearn = { addr: t.addr, key: sel.idx, timer: setTimeout(() => {
+        midiLearn = null;
+        setStatus('No note or CC from the computer in 30 s — stopped waiting', 'fault');
+        if (state.screen === 'configure') rerenderKeepingScroll();
+      }, ARM_TIMEOUT_MS) };
+      setStatus('Waiting: in your music program, light this pad or move the control…', 'ok');
+      return render(root);
+    }
+    // §8.9: a modifier toggled in the shortcut builder
+    if (el.dataset.chordMod) {
+      const p = chordParts(deskActionAt(t.addr, sel.idx)) ?? { mods: [], key: '' };
+      const m = el.dataset.chordMod;
+      await setDeskAction(t.addr, sel.idx, chordFrom(p.mods.includes(m) ? p.mods.filter(x => x !== m) : [...p.mods, m], p.key));
+      return render(root);
+    }
+    // §8.3: the mode decides which options the inspector shows. Chosen here as on
+    // Connect; it takes effect on the board after Save and a replug.
+    if (el.dataset.mode) {
+      const mode = el.dataset.mode;
+      if (mode === viewMode()) return;
+      if (mode === 'xinput' && !confirm(`FTC mode makes the board an Xbox pad, which has no config port: after Save and a
+replug this page cannot reach it. To configure it again, hold its CFG button while plugging it in.
+
+Continue?`)) return;
+      try {
+        await state.client.usb(mode);
+        state.hello = await state.client.hello();
+        setStatus(`${MODES.find(m => m[0] === mode)[1]} chosen — Save, then unplug the board and plug it back in`, 'ok');
+      } catch (e) {
+        setStatus(e.message === 'args' ? `This board's firmware has no ${MODES.find(m => m[0] === mode)[1]} mode yet: update it on Firmware first`
+                                       : `USB: ${e.message}`, 'fault');
+      }
+      return render(root);
+    }
+    // §8.9: what a button sends under desk
+    if (el.dataset.hid !== undefined) {
+      stopRecording();
+      if (!el.dataset.hid && !bindingAt(t.addr, sel.idx)) return;
+      await setDeskAction(t.addr, sel.idx, canonical(el.dataset.hid));
+      return render(root);
+    }
+    if (el.id === 'hid-rec') {
+      if (recording) { stopRecording(); setStatus('Recording cancelled', 'ok'); return render(root); }
+      const addr = t.addr, key = sel.idx;
+      const done = async (action) => {
+        stopRecording();
+        if (action === null) { setStatus('Recording cancelled', 'ok'); return render(root); }
+        await setDeskAction(addr, key, action);
+        render(root);
+      };
+      recording = {
+        mods: new Set(), other: false,
+        down: (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          if (ev.repeat) return;
+          if (isModifierCode(ev.code)) { modsOf(ev).forEach(m => recording.mods.add(m)); return; }
+          if (ev.code === 'Escape' && !modsOf(ev).length) return done(null);
+          const c = chordOf(ev);
+          if (!c) { setStatus(`The board has no key for ${ev.code}`, 'fault'); return; }
+          recording.other = true;
+          done(c);
+        },
+        // Ctrl, Shift... on their own: recorded when let go with nothing else pressed
+        up: (ev) => {
+          ev.preventDefault(); ev.stopPropagation();
+          if (recording && isModifierCode(ev.code) && !recording.other && recording.mods.size)
+            done(canonical([...recording.mods].join('+')));
+        },
+      };
+      document.addEventListener('keydown', recording.down, true);
+      document.addEventListener('keyup', recording.up, true);
+      setStatus('Press the shortcut on this computer\'s keyboard', 'ok');
+      return render(root);
+    }
+    if (el.dataset.knob) {
+      const [up, down] = el.dataset.knob.split(',');
+      const e0 = encAt(t.addr, sel.idx) ?? {};
+      const spare = freeButtons(2);
+      const cw = e0.cw ?? spare.shift(), ccw = e0.ccw ?? spare.shift();
+      if (!cw || !ccw) return setStatus('No spare button numbers left for this knob', 'fault');
+      await pushMap(m => {
+        m.enc = m.enc ?? [];
+        let e1 = m.enc.find(x => x.addr === t.addr && x.idx === sel.idx);
+        if (!e1) { e1 = { addr: t.addr, idx: sel.idx }; m.enc.push(e1); }
+        e1.cw = cw; e1.ccw = ccw;
+        adopt(m, withAction(withAction(m, cw, up), ccw, down));
+      }, `ENC${sel.idx + 1}: ${actionText(up)} / ${actionText(down)} on buttons ${cw} and ${ccw} in desk (unsaved)`);
+      return render(root);
+    }
 
     if (el.id === 'debounce-reset') {
       await pushMap(m => { m.debounce = { ...(m.debounce ?? {}) }; delete m.debounce[t.addr]; },
@@ -2084,7 +2507,7 @@ export function render(root) {
       // A free axis, so the bind displaces nobody. A board before PROTOCOL.md
       // rev 0.43 also left a stick on an axis `bind axis` took, which this
       // still avoids for anyone who has not updated the main module.
-      const axis = cur?.axis ?? AXES.find(a => !ownerOf(a));
+      const axis = cur?.axis ?? axesFor().find(a => !ownerOf(a));
       if (!axis) return setStatus('All four axes are taken', 'fault');
       setStatus(`Turn the knob you want as axis ${axis}…`, 'fault');
       try {

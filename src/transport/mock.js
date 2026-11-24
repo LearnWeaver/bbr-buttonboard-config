@@ -6,6 +6,9 @@
 import { crc16Running } from '../util.js';
 import { defaultDebounce } from '../tilegeom.js';
 import { namesCheck } from '../names.js';
+import { hidCheck } from '../desk.js';
+import { midiCheck, encMidiCheck } from '../midi.js';
+import { simCheck } from '../sim.js';
 import { heartbeatCheck } from '../heartbeat.js';
 import { decodeXinputOut, rumblePacket, playerPacket, sdkByte, validateBinds,
          bindsOf, textsOf, isLedEntry, isTextEntry, applyLedActions, liveTileKey, mapFits } from '../rumble.js';
@@ -553,6 +556,13 @@ export class MockTransport {
           // map.c: a trigger is lt or rt, and each has at most one encoder (§15.6 rev 0.37)
           const trig = (m.enc ?? []).map(e => e.trigger).filter(x => x !== undefined);
           if (trig.some(x => x !== 'lt' && x !== 'rt') || new Set(trig).size !== trig.length) return err('enc');
+          // map.c (§8.10): an encoder's midi is a CC only, handed back canonical
+          for (const e of m.enc ?? []) {
+            if (e.midi === undefined) continue;
+            const c = encMidiCheck(e.midi);
+            if (c === null) return err('enc');
+            if (c) e.midi = c; else delete e.midi;
+          }
           // map.c: sticks (§17.6), and frc axes unique across encoders and sticks
           const stickErr = stickMapError(m);
           if (stickErr) return err(stickErr);
@@ -584,6 +594,17 @@ export class MockTransport {
           const hb = heartbeatCheck(m.heartbeat);
           if (hb.err) return err(hb.err);
           if (hb.canonical) m.heartbeat = hb.canonical; else delete m.heartbeat;
+          // map.c: hid keys are logical buttons, each one desk action
+          // (§8.9, rev 0.49), handed back canonical; an empty one is no entry.
+          const hid = hidCheck(m.hid);
+          if (hid.err) return err(hid.err, hid.btn ? { btn: hid.btn } : {});
+          if (hid.canonical) m.hid = hid.canonical; else delete m.hid;
+          const sim = simCheck(m.sim);                   // map.c (§8.11)
+          if (sim.err) return err(sim.err);
+          if (sim.canonical) m.sim = sim.canonical; else delete m.sim;
+          const midi = midiCheck(m.midi);                // map.c (§8.10)
+          if (midi.err) return err(midi.err, midi.btn ? { btn: midi.btn } : {});
+          if (midi.canonical) m.midi = midi.canonical; else delete m.midi;
           // map.c's canonical emit: legends, then messages, then LED
           // actions, each in the order given; hex upper case, 000000 as
           // `off`, `fx` only when it is not solid and never on `map`, and a
@@ -622,7 +643,7 @@ export class MockTransport {
         if (a[0] === 'stick') {                             // §17.6: waits for a deflection
           const side = a.length === 2 && (a[1] === 'left' || a[1] === 'right') ? a[1] : null;
           const x = +a[1], y = +a[2];
-          const axes = a.length === 3 && [x, y].every(v => Number.isInteger(v) && v >= 1 && v <= 4) && x !== y;
+          const axes = a.length === 3 && [x, y].every(v => Number.isInteger(v) && v >= 1 && v <= 8) && x !== y;
           if (!side && !axes) return err('args');
           this._emit({ ev: 'fault', on: true, why: 'bind' });
           this.bindPending = setTimeout(() => {
@@ -641,7 +662,7 @@ export class MockTransport {
         }
         if (a[0] === 'axis') {                              // §15.7
           const axis = +a[1];
-          if (!(axis >= 1 && axis <= 4)) return err('args');
+          if (!(axis >= 1 && axis <= 8)) return err('args');
           this._emit({ ev: 'fault', on: true, why: 'bind' });
           this.bindPending = setTimeout(() => {
             const t = this.tiles.find(x => x.enc);
@@ -720,6 +741,8 @@ export class MockTransport {
       case 'test': {                                   // §9.10
         if (this.bindPending) return err('busy');
         const [mode, arg] = a;
+        // §8.9: under desk every test button would be an action
+        if ((this.usb === 'desk' || this.usb === 'midi') && !(mode === 'off' && a.length === 1)) return err('usb');
         if (mode === 'off'  && a.length === 1) { this.test = 'off'; return ok({ test: 'off' }); }
         if (mode === 'all'  && a.length === 1) { this.test = 'all'; return ok({ test: 'all' }); }
         if (mode === 'walk' && a.length <= 2) {
@@ -813,7 +836,9 @@ export class MockTransport {
         return ok();
       }
       case 'power': return ok({ budget: +a[1] });
-      case 'usb': this.usb = a[0]; return ok({ usb: a[0], pending: true });
+      case 'usb':
+        if (a.length !== 1 || !['frc', 'xinput', 'desk', 'midi', 'sim'].includes(a[0])) return err('args');
+        this.usb = a[0]; return ok({ usb: a[0], pending: true });
       case 'pixel':
         if (a.length !== 1 || !['on', 'off'].includes(a[0])) return err('args');
         this.pixel = a[0] === 'on';
