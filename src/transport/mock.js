@@ -580,7 +580,9 @@ export class MockTransport {
             for (const [addr, e] of Object.entries(m.disp)) {
               if (!(+addr >= 1 && +addr <= 31) || typeof e !== 'object' || e === null || Array.isArray(e)) return err('disp');
               if (e.press !== undefined && e.press !== 'invert' && e.press !== 'off') return err('disp');
-              if (e.press === 'invert') disp[addr] = { press: 'invert' };
+              if (e.rotate !== undefined && e.rotate !== 0 && e.rotate !== 180) return err('disp');   // rev 0.52
+              const d = { ...(e.press === 'invert' ? { press: 'invert' } : {}), ...(e.rotate === 180 ? { rotate: 180 } : {}) };
+              if (Object.keys(d).length) disp[addr] = d;
             }
             if (Object.keys(disp).length) m.disp = disp; else delete m.disp;
           }

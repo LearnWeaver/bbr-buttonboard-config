@@ -1312,7 +1312,25 @@ function inspectDisp(t) {
       <input type="range" id="disp-contrast" min="0" max="255" value="${draftFor(t).contrast ?? 143}" style="width:100%">
       <p class="muted small">On a backlit panel this sets the backlight, so 0 is dark. It applies straight away.</p>
     </div>
-    ${t.keys ? pressInvertView(t) : ''}`;
+    ${t.keys ? pressInvertView(t) : ''}
+    ${t.type === 'disp1' || t.type === 'disp2' ? rotateView(t) : ''}`;
+}
+
+// CFG_ROTATE_180 (§4.5, rev 0.52): for a tile mounted upside down. disp1 and
+// disp2 only: a screen-key is turned by turning its cap.
+function rotateView(t) {
+  const on = state.map?.disp?.[t.addr]?.rotate === 180;
+  return `
+    <div>
+      <div class="insp-title">Orientation</div>
+      <div class="group">
+        <button class="chip ${!on ? 'sel' : ''}" data-disp-rotate="0">Right way up</button>
+        <button class="chip ${on ? 'sel' : ''}" data-disp-rotate="180">Upside down</button>
+      </div>
+      <p class="muted small">For a tile fitted the wrong way round in a panel: everything on the screen turns half
+        round. The text is redrawn at once; a picture on it has to be shown again. Needs tile firmware 0.4.1 or
+        newer; an older tile ignores it. Save to keep it.</p>
+    </div>`;
 }
 
 // The screen's answer to "Flash when pressed" (§4.5 CFG_PRESS_INVERT): the
@@ -1987,7 +2005,7 @@ export function render(root) {
   };
 
   root.onclick = async (e) => {
-    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],[data-hb],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger],[data-stick],[data-side],[data-push-btn],#stick-move,#stick-unbind,#stick-dz-reset,#cal-begin,#cal-start,#cal-done,#cal-cancel,[data-hid],#hid-rec,[data-knob],[data-chord-mod],[data-mode],[data-midi-kind],#midi-learn,[data-midi-clear],[data-sim-hat]');
+    const el = e.target.closest('[data-tile],[data-key],[data-enc],[data-disp-sel],[data-btn],[data-combo],#combo,[data-un],[data-rgb],[data-fx],[data-axis],#press,#turn,#zero,#disp-send,#disp-clear,#disp-pic-send,#disp-pic-drop,#disp-pic-store,[data-slot-show],[data-slot-erase],[data-rfire],#rumble-arm,#rumble-copy,[data-rled-rgb],[data-rled-del],[data-press-fb],[data-disp-press],[data-disp-rotate],[data-hb],#debounce-reset,#slot-check,[data-slot-load],#msg-save,[data-msg-load],[data-msg-del],[data-trigger],[data-stick],[data-side],[data-push-btn],#stick-move,#stick-unbind,#stick-dz-reset,#cal-begin,#cal-start,#cal-done,#cal-cancel,[data-hid],#hid-rec,[data-knob],[data-chord-mod],[data-mode],[data-midi-kind],#midi-learn,[data-midi-clear],[data-sim-hat]');
     if (!el) return;
     if (recording && el.id !== 'hid-rec') stopRecording();
 
@@ -2597,6 +2615,18 @@ Continue?`)) return;
         else if (Object.keys(rest).length) m.disp[t.addr] = rest;
         else delete m.disp[t.addr];
       }, on ? `Tile ${t.addr}'s screen inverts when pressed (unsaved)` : `Tile ${t.addr}'s screen no longer inverts (unsaved)`);
+      return render(root);
+    }
+
+    if (el.dataset.dispRotate !== undefined) {
+      const deg = +el.dataset.dispRotate;
+      await pushMap(m => {
+        m.disp = { ...(m.disp ?? {}) };
+        const { rotate, ...rest } = m.disp[t.addr] ?? {};
+        if (deg) m.disp[t.addr] = { ...rest, rotate: 180 };
+        else if (Object.keys(rest).length) m.disp[t.addr] = rest;
+        else delete m.disp[t.addr];
+      }, deg ? `Tile ${t.addr}'s screen is upside down (unsaved)` : `Tile ${t.addr}'s screen is the right way up (unsaved)`);
       return render(root);
     }
 
