@@ -11,8 +11,8 @@ export const HAT_DIRS = ['up', 'right', 'down', 'left'];
 
 // [keys, encoders] for a tile not seen since power-up: §8.11's table
 export const TYPE_COUNTS = {
-  mx9: [9, 0], mx9rgb: [9, 0], mx6: [6, 0], mx6rgb: [6, 0], mx4: [4, 0], arc4: [4, 0], mx3: [3, 0],
-  mx1: [1, 0], enc2: [2, 2], enc1: [1, 1], stick1: [1, 0], screenkey1: [1, 0], disp1: [0, 0], disp2: [0, 0],
+  mx9: [9, 0], mx9rgb: [9, 0], mx6: [6, 0], mx6rgb: [6, 0], mx4: [4, 0], arc4: [4, 0], arc8: [8, 0], mx3: [3, 0],
+  mx1: [1, 0], enc2: [2, 2], enc1: [1, 1], stick1: [1, 0], screenkey1: [1, 0], disp1: [0, 0], disp2: [0, 0], seg2: [0, 0], seg4: [0, 0],
 };
 
 /**

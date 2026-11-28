@@ -23,6 +23,7 @@ import { RUMBLE_CODE_MAX, bindFor, bindsOf, withBind, withoutBind,
 import { XINPUT_SLOTS, padView, tinySlot } from '../xpad.js';
 import { MEDIA, MOUSE, actionOf, actionText, withAction, canonical, chordOf, isModifierCode, modsOf,
          CHORD_MODS, KEY_GROUPS, chordParts, chordFrom } from '../desk.js';
+import { seg7Cells, seg7Fit, seg7Svg } from '../seg7.js';
 import { simLayout, simKeyButton, simEncButton, hatDirOf, isToggle, withHatDir, withToggle, HAT_DIRS } from '../sim.js';
 import { KINDS as MIDI_KINDS, parseMidi, formatMidi, canonicalMidi, midiText, midiOf, withMidi, noteName } from '../midi.js';
 import { attrByte, cssOf, isColor, ascii, unrepresentable, NAMES, CAP_DISP_COLOR, inkPaperOf,
@@ -362,6 +363,11 @@ export function leave() {
 const drafts = new Map();
 
 const hasPanel = (t) => !!(t?.cols && t?.rows);
+// §14.11: a seven-segment tile's cells are digits, and a '.' after a
+// character rides in that digit's point instead of taking a cell, so its row
+// is fitted by cells, not characters ("1.5" is two cells).
+const isSegPanel = (t) => !!t?.seg;
+const fitRow = (t, text) => isSegPanel(t) ? seg7Fit(text, t.cols) : text.slice(0, t.cols).padEnd(t.cols, ' ');
 // §14.8: the pixel size is the advertisement, so its absence is the answer to
 // "can this tile take a picture?" rather than something to infer from the type.
 const takesImage = (t) => !!(t?.pxW && t?.pxH);
@@ -592,11 +598,11 @@ function rowsAsMessage(t) {
   for (const { r, row, dbl } of panelRows(t)) {
     if (unrepresentable(row.ink, row.paper)) return null;
     const a = attrByte({ ink: row.ink, paper: row.paper, double: dbl });
-    const text = ascii(row.text).slice(0, t.cols);
+    const text = fitRow(t, ascii(row.text)).replace(/ +$/, '');
     // A row with a visible background is padded to the panel's width, as Draw
     // does, so the colour spans it. Anything else loses its trailing spaces:
     // they cost bytes of the map and draw nothing after a CLEAR.
-    rows[r] = a & (0xE0 | 0x01) ? text.padEnd(t.cols) : text.replace(/\s+$/, '');
+    rows[r] = a & (0xE0 | 0x01) ? fitRow(t, text) : text.replace(/\s+$/, '');
     attrs[r] = a;
   }
   return { rows, attrs };
@@ -922,6 +928,7 @@ function inspectKey(t) {
 function ledPicker(entry, { flash = false } = {}) {
   const lit = entry.rgb && !isBlack(entry.rgb);
   const on = flashOf(entry);
+  const trail = on && entry.press === 'trail';
   return `
       <div class="swatches">
         ${swatchesOf('data-rgb', entry.rgb)}
@@ -933,11 +940,15 @@ function ledPicker(entry, { flash = false } = {}) {
                  ${lit ? '' : 'disabled title="pick a colour first"'}>${f}</button>`).join('')}
       </div>
       ${flash ? `<div class="group" style="margin-top:.6rem">
-        <button class="chip ${on ? 'sel' : ''}" data-press-fb="${on ? 'off' : 'on'}"
+        <button class="chip ${on && !trail ? 'sel' : ''}" data-press-fb="${on && !trail ? 'off' : 'on'}"
                 title="flash the feedback colour while the key is held">Flash when pressed</button>
+        <button class="chip ${trail ? 'sel' : ''}" data-press-fb="${trail ? 'off' : 'trail'}"
+                title="a random colour on each press, fading out over a second">Colour trail</button>
       </div>
-      <p class="muted small">${on ? (lit ? 'The key flashes white while it is held, over its colour.'
-                                        : 'The key stays dark and flashes white while it is held.')
+      <p class="muted small">${trail ? (lit ? 'Each press lights the key in a random colour, which fades back to its own colour over a second. Tap a few keys and you see the trail.'
+                                           : 'Each press lights the key in a random colour, which fades out over a second. Tap a few keys and you see the trail.')
+                             : on ? (lit ? 'The key flashes white while it is held, over its colour.'
+                                         : 'The key stays dark and flashes white while it is held.')
                                   : 'No flash while the key is held.'}</p>` : ''}`;
 }
 
@@ -946,7 +957,8 @@ function ledPicker(entry, { flash = false } = {}) {
 // "no colour, but flash when pressed".
 const isBlack = (rgb) => /^0{6}$/.test(rgb ?? '');
 // Press feedback is on for a button with an entry whose press is not false;
-// a button with no entry has nothing to flash.
+// a button with no entry has nothing to flash. `press: 'trail'` (§13.3) is
+// the colour trail instead of the white flash.
 const flashOf = (entry) => !!entry.rgb && entry.press !== false;
 
 // A key's own colour (the map's led.tile), which is what an unbound key shows.
@@ -1017,6 +1029,16 @@ function panelView(t) {
     return `<button class="panel ${sel_ ? 'sel' : ''}" data-disp-sel="1"
                     style="aspect-ratio:${t.pxW} / ${t.pxH}">
       <canvas class="panel-pic" data-glass="1" width="${t.pxW}" height="${t.pxH}"></canvas>
+    </button>`;
+  }
+  if (isSegPanel(t)) {
+    // The digits as the tile lights them (§14.11): the same cells, from the
+    // same table, a '.' merged into the digit before it.
+    const row = draftFor(t)[0];
+    const cells = seg7Cells(ascii(row.text), t.cols, { inverse: row.ink === 'black' && row.paper === 'white' });
+    return `<button class="panel ${sel_ ? 'sel' : ''}" data-disp-sel="1"
+                    style="aspect-ratio:${t.cols * 82 + 6} / 112;background:#111">
+      ${seg7Svg(cells)}
     </button>`;
   }
   return `<button class="panel ${sel_ ? 'sel' : ''}" data-disp-sel="1"
@@ -1273,7 +1295,9 @@ function inspectDisp(t) {
       <div class="insp-title">Panel</div>
       <div class="insp-head"><strong>${t.cols} × ${t.rows}</strong>
         <span class="mono muted">${colour ? 'colour' : 'mono'} · tile ${t.addr}</span></div>
-      <p class="muted small">Text longer than ${t.cols} characters is cut off.</p>
+      <p class="muted small">${isSegPanel(t)
+        ? `${t.cols} seven-segment digits. A <code>.</code> lights the point of the digit before it, so <code>1.5</code> fits; letters seven segments cannot draw show as ≡.`
+        : `Text longer than ${t.cols} characters is cut off.`}</p>
     </div>
 
     <div>
@@ -1281,16 +1305,18 @@ function inspectDisp(t) {
       ${rows.map(({ r, row, dbl }) => `
         <div class="disprow ${dbl ? 'dbl' : ''}">
           <span class="mono muted disprow-n">${dbl ? `${r}+${r + 1}` : r}</span>
-          <input type="text" data-disp="text" data-row="${r}" maxlength="${t.cols}"
+          <input type="text" data-disp="text" data-row="${r}" maxlength="${isSegPanel(t) ? t.cols * 2 : t.cols}"
                  value="${row.text.replace(/"/g, '&quot;')}" placeholder="row ${r}">
-          <label class="disprow-dbl" title="double height: uses this row and the next">
-            <input type="checkbox" data-disp="double" data-row="${r}" ${row.double ? 'checked' : ''}>2×</label>
+          ${isSegPanel(t) ? '' : `<label class="disprow-dbl" title="double height: uses this row and the next">
+            <input type="checkbox" data-disp="double" data-row="${r}" ${row.double ? 'checked' : ''}>2×</label>`}
           ${pick('ink', r, row.ink)}${pick('paper', r, row.paper)}
           ${unrepresentable(row.ink, row.paper) ? '<span class="small fault">black on black</span>' : ''}
         </div>`).join('')}
       <p class="muted small">${colour
         ? 'Pick a text colour and a background colour for each row.'
-        : 'This panel is black and white only. Pick white on black or black on white for each row.'}</p>
+        : isSegPanel(t)
+          ? 'White on black lights the digits; black on white lights the segments they leave dark.'
+          : 'This panel is black and white only. Pick white on black or black on white for each row.'}</p>
     </div>
 
     <div>
@@ -1310,14 +1336,17 @@ function inspectDisp(t) {
     <div>
       <div class="insp-title">Contrast</div>
       <input type="range" id="disp-contrast" min="0" max="255" value="${draftFor(t).contrast ?? 143}" style="width:100%">
-      <p class="muted small">On a backlit panel this sets the backlight, so 0 is dark. It applies straight away.</p>
+      <p class="muted small">${isSegPanel(t)
+        ? 'Brightness of the digits, 0 dark. It applies straight away.'
+        : 'On a backlit panel this sets the backlight, so 0 is dark. It applies straight away.'}</p>
     </div>
     ${t.keys ? pressInvertView(t) : ''}
-    ${t.type === 'disp1' || t.type === 'disp2' ? rotateView(t) : ''}`;
+    ${t.type === 'disp1' || t.type === 'disp2' || isSegPanel(t) ? rotateView(t) : ''}`;
 }
 
-// CFG_ROTATE_180 (§4.5, rev 0.52): for a tile mounted upside down. disp1 and
-// disp2 only: a screen-key is turned by turning its cap.
+// CFG_ROTATE_180 (§4.5, rev 0.52): for a tile mounted upside down. disp1,
+// disp2 and the seven-segment tiles (§14.11) only: a screen-key is turned by
+// turning its cap.
 function rotateView(t) {
   const on = state.map?.disp?.[t.addr]?.rotate === 180;
   return `
@@ -2310,7 +2339,7 @@ Continue?`)) return;
           // Pad to the panel width: the tile writes exactly the characters it
           // is given and never blanks the rest of a row itself (§14.4), so the
           // trailing spaces are what erase whatever was longer before.
-          const text = ascii(row.text).slice(0, t.cols).padEnd(t.cols, ' ');
+          const text = fitRow(t, ascii(row.text));
           const attr = attrByte({ ink: row.ink, paper: row.paper, double: dbl });
           // Only what changed. A row costs an auxiliary slot (§3.2), and the
           // style is part of the key so a recolour still redraws.
@@ -2632,18 +2661,20 @@ Continue?`)) return;
 
     if (el.dataset.pressFb) {
       const btn = bindingAt(t.addr, sel.idx); if (!btn) return;
-      const on = el.dataset.pressFb === 'on';
+      const want = el.dataset.pressFb;                             // 'on' (flash), 'trail' or 'off'
       await pushMap(m => {
         m.led = m.led ?? {}; m.led.btn = m.led.btn ?? {};
         const e = m.led.btn[btn];
-        if (on) {
-          if (!e) m.led.btn[btn] = { rgb: '000000' };             // dark, but flashes
-          else { const { press, ...rest } = e; m.led.btn[btn] = rest; }   // press defaults to true
-        } else if (e) {
+        const { press, ...rest } = e ?? { rgb: '000000' };          // no entry: dark, with feedback
+        if (want === 'on') m.led.btn[btn] = rest;                  // press defaults to true
+        else if (want === 'trail') m.led.btn[btn] = { ...rest, press: 'trail' };
+        else if (e) {
           if (isBlack(e.rgb)) delete m.led.btn[btn];               // nothing left to show
-          else m.led.btn[btn] = { ...e, press: false };
+          else m.led.btn[btn] = { ...rest, press: false };
         }
-      }, on ? `${btnLabel(btn)} flashes when pressed (unsaved)` : `${btnLabel(btn)} no longer flashes (unsaved)`);
+      }, want === 'on' ? `${btnLabel(btn)} flashes when pressed (unsaved)`
+       : want === 'trail' ? `${btnLabel(btn)} leaves a colour trail when pressed (unsaved)`
+       : `${btnLabel(btn)} no longer flashes (unsaved)`);
       return render(root);
     }
 
@@ -2662,7 +2693,8 @@ Continue?`)) return;
         if (fx) book[k] = { ...(book[k] ?? {}), fx };
         // off on a button that flashes keeps the flash: a black entry
         else if (el.dataset.rgb === 'off') {
-          if (btn && book[k] && flashOf(book[k])) book[k] = { rgb: '000000' };
+          if (btn && book[k] && flashOf(book[k]))
+            book[k] = book[k].press === 'trail' ? { rgb: '000000', press: 'trail' } : { rgb: '000000' };
           else delete book[k];
         }
         else book[k] = { ...(book[k] ?? {}), rgb: el.dataset.rgb };

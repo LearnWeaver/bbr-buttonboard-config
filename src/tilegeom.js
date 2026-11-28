@@ -18,6 +18,7 @@ const TYPES = {
   // 1-based for CSS grid, in key order (PROTOCOL.md §5: reading order).
   mx4:    { cols: 3, shape: 'square', name: '4 MX (WASD)', cells: [[1, 2], [2, 1], [2, 2], [2, 3]] },
   arc4:   { cols: 2, shape: 'round',  name: '4 arcade' },
+  arc8:   { cols: 4, shape: 'round',  name: '8 arcade' },
   enc2:   { cols: 2, shape: 'round',  name: '2 encoders' },
   enc1:   { cols: 1, shape: 'round',  name: '1 encoder' },
   // Display tiles (§14). `disp1` has no keys at all, and `screenkey1` has
@@ -25,6 +26,8 @@ const TYPES = {
   disp1:      { cols: 1, shape: 'square', name: 'Display' },
   screenkey1: { cols: 1, shape: 'square', name: 'Screen key' },
   disp2:      { cols: 1, shape: 'square', name: 'Colour display' },
+  seg2:       { cols: 1, shape: 'square', name: '2-digit display' },
+  seg4:       { cols: 1, shape: 'square', name: '4-digit display' },
   // §17: the one key is the stick's own push; the stick is drawn below it.
   stick1:     { cols: 1, shape: 'round',  name: 'Thumbstick' },
 };
@@ -35,7 +38,7 @@ const CAP_DEBOUNCE = 1 << 1;        // shared/protocol.h: honours SET_CONFIG deb
 // The debounce the module sends a tile when the map has no override for it:
 // firmware/core/tilesm.c tilesm_default_debounce(), PROTOCOL.md §4.5.
 export function defaultDebounce(type) {
-  return type === 'arc4' ? 20 : 5;
+  return type === 'arc4' || type === 'arc8' ? 20 : 5;
 }
 
 // A debounce setting only means something on a tile with keys that honours it.
@@ -61,6 +64,7 @@ export function geom(tile) {
 // the panel is, so a tile with no keys is not a blank card.
 export function displayNote(tile) {
   if (!tile.cols || !tile.rows) return '';
+  if (tile.seg) return `${tile.cols}-digit seven-segment display — click it to write to it`;
   const colour = (tile.caps & CAP_DISP_COLOR) ? 'colour' : 'mono';
   return `${tile.cols} × ${tile.rows} ${colour} text panel — click it to write to it`;
 }
