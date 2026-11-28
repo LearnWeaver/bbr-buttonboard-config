@@ -24,6 +24,7 @@ import { XINPUT_SLOTS, padView, tinySlot } from '../xpad.js';
 import { MEDIA, MOUSE, actionOf, actionText, withAction, canonical, chordOf, isModifierCode, modsOf,
          CHORD_MODS, KEY_GROUPS, chordParts, chordFrom } from '../desk.js';
 import { seg7Cells, seg7Fit, seg7Svg } from '../seg7.js';
+import { ledbarZone, ledbarLit } from '../ledbar.js';
 import { simLayout, simKeyButton, simEncButton, hatDirOf, isToggle, withHatDir, withToggle, HAT_DIRS } from '../sim.js';
 import { KINDS as MIDI_KINDS, parseMidi, formatMidi, canonicalMidi, midiText, midiOf, withMidi, noteName } from '../midi.js';
 import { attrByte, cssOf, isColor, ascii, unrepresentable, NAMES, CAP_DISP_COLOR, inkPaperOf,
@@ -367,6 +368,8 @@ const hasPanel = (t) => !!(t?.cols && t?.rows);
 // character rides in that digit's point instead of taking a cell, so its row
 // is fitted by cells, not characters ("1.5" is two cells).
 const isSegPanel = (t) => !!t?.seg;
+// §14.12: an LED bar's cells are its LEDs, lit or dark; colour is SET_LEDS'.
+const isLedBar = (t) => !!t?.ledbar;
 const fitRow = (t, text) => isSegPanel(t) ? seg7Fit(text, t.cols) : text.slice(0, t.cols).padEnd(t.cols, ' ');
 // §14.8: the pixel size is the advertisement, so its absence is the answer to
 // "can this tile take a picture?" rather than something to infer from the type.
@@ -1031,6 +1034,16 @@ function panelView(t) {
       <canvas class="panel-pic" data-glass="1" width="${t.pxW}" height="${t.pxH}"></canvas>
     </button>`;
   }
+  if (isLedBar(t)) {
+    // The bar as the tile lights it (§14.12): cells by §14.11's whole-cell
+    // rule, each in its zone colour -- what an LED no host has coloured shows.
+    const lit = ledbarLit(draftFor(t).bar ?? 0, t.cols);
+    return `<button class="panel ${sel_ ? 'sel' : ''}" data-disp-sel="1"
+                    style="aspect-ratio:${t.cols * 3} / 4;background:#111;display:flex;gap:3px;padding:8px">
+      ${Array.from({ length: t.cols }, (_, i) =>
+        `<span style="flex:1;border-radius:2px;background:${i < lit ? ledbarZone(i, t.cols) : '#2a2a2a'}"></span>`).join('')}
+    </button>`;
+  }
   if (isSegPanel(t)) {
     // The digits as the tile lights them (§14.11): the same cells, from the
     // same table, a '.' merged into the digit before it.
@@ -1279,7 +1292,29 @@ function inspectRumble(t) {
     </div>`;
 }
 
+// An LED bar (§14.12) is driven by a value, not by rows of text.
+function inspectLedBar(t) {
+  const d = draftFor(t);
+  return `
+    <div>
+      <div class="insp-title">Bar</div>
+      <div class="insp-head"><strong>${t.cols} LEDs</strong>
+        <span class="mono muted">LED bar · tile ${t.addr}</span></div>
+      <input type="range" id="disp-bar" min="0" max="255" value="${d.bar ?? 0}" style="width:100%">
+      <p class="muted small">The bar lights one LED per sixteenth of the value. Robot code and companion apps send
+        <code>disp ${t.addr} bar 0 0 ${t.cols} &lt;0-255&gt;</code> then <code>disp ${t.addr} show</code>.
+        Colours are the LEDs': green, yellow and red zones until you colour an LED.</p>
+    </div>
+    <div>
+      <div class="insp-title">Brightness</div>
+      <input type="range" id="disp-contrast" min="0" max="255" value="${d.contrast ?? 255}" style="width:100%">
+      <p class="muted small">The bar's own brightness, under the board's LED power cap. It applies straight away.</p>
+    </div>
+    ${rotateView(t)}`;
+}
+
 function inspectDisp(t) {
+  if (isLedBar(t)) return inspectLedBar(t);
   const colour = isColourPanel(t);
   // A mono tile refuses every colour bit (§14.7), so do not offer them: the
   // refusal would be an `args` indistinguishable from a bad row.
@@ -1923,6 +1958,15 @@ export function render(root) {
       const v = Math.round(+el.value);
       if (!(v >= 0 && v <= STICK_DEADZONE_MAX)) { setStatus(`Deadzone is 0 to ${STICK_DEADZONE_MAX} %`, 'fault'); return render(root); }
       await pushMap(m => adopt(m, withStickField(m, t.addr, sel.idx, 'deadzone', v)), `Deadzone ${v} % (unsaved)`);
+      return render(root);
+    }
+    if (el.id === 'disp-bar') {
+      draftFor(t).bar = +el.value;
+      try {
+        await state.client.dispBar(t.addr, 0, 0, t.cols, +el.value);
+        await state.client.dispShow(t.addr);
+        setStatus(`Bar ${el.value} on tile ${t.addr}`, 'ok');
+      } catch (err) { setStatus(`Display: ${err.message}`, 'fault'); }
       return render(root);
     }
     if (el.id === 'disp-contrast') {

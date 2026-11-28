@@ -28,6 +28,7 @@ const TYPES = {
   disp2:      { cols: 1, shape: 'square', name: 'Colour display' },
   seg2:       { cols: 1, shape: 'square', name: '2-digit display' },
   seg4:       { cols: 1, shape: 'square', name: '4-digit display' },
+  bar16:      { cols: 1, shape: 'square', name: '16-LED bar' },
   // §17: the one key is the stick's own push; the stick is drawn below it.
   stick1:     { cols: 1, shape: 'round',  name: 'Thumbstick' },
 };
@@ -65,6 +66,7 @@ export function geom(tile) {
 export function displayNote(tile) {
   if (!tile.cols || !tile.rows) return '';
   if (tile.seg) return `${tile.cols}-digit seven-segment display — click it to write to it`;
+  if (tile.ledbar) return `${tile.cols}-LED bar — click it to set its value`;
   const colour = (tile.caps & CAP_DISP_COLOR) ? 'colour' : 'mono';
   return `${tile.cols} × ${tile.rows} ${colour} text panel — click it to write to it`;
 }
